@@ -1557,7 +1557,9 @@ function maybeReady(){
         computeAndDraw();applyMode();
         setStep(2); // Compare step becomes active
         flashAligned(); // subtle success pulse so the auto-align is felt, not just done
-        const via=auto.source==='landmarks'
+        const via=auto.source==='frame'
+          ? 'Auto-aligned on the artwork frame + print features (most accurate).'
+          : auto.source==='landmarks'
           ? 'Auto-aligned from interior print features (most accurate).'
           : 'Auto-aligned from detected borders.';
         hint.innerHTML=via+' '
@@ -1846,17 +1848,45 @@ function finishPickPhase(){
 
 let alignMode=2; // set when alignment is computed: 2=similarity, 4=perspective
 
-/* ---- 4-point perspective (homography) ---- */
-// Solve 8x8 linear system for homography mapping src[i]->dst[i] (4 pairs)
+/* ---- perspective (homography) ---- */
+// Solve for homography mapping src[i]->dst[i]. Accepts 4+ pairs: with exactly 4
+// it's the classic 8x8 solve; with more it's a least-squares fit via normal
+// equations (A^T A h = A^T b), which lets auto-align fuse many feature
+// correspondences (art-frame corners + print landmarks) into one transform.
 function solveHomography(src,dst){
-  const A=[],b=[];
-  for(let i=0;i<4;i++){
+  const n=Math.min(src.length,dst.length);
+  const rows=[],b=[];
+  for(let i=0;i<n;i++){
     const sx=src[i].x,sy=src[i].y,dx=dst[i].x,dy=dst[i].y;
-    A.push([sx,sy,1,0,0,0,-sx*dx,-sy*dx]); b.push(dx);
-    A.push([0,0,0,sx,sy,1,-sx*dy,-sy*dy]); b.push(dy);
+    rows.push([sx,sy,1,0,0,0,-sx*dx,-sy*dx]); b.push(dx);
+    rows.push([0,0,0,sx,sy,1,-sx*dy,-sy*dy]); b.push(dy);
   }
-  const h=gauss(A,b); // [a,b,c,d,e,f,g,h]
+  let A=rows,rhs=b;
+  if(n>4){ // normal equations: 8x8 regardless of point count
+    const M=[],v=[];
+    for(let r=0;r<8;r++){M.push(new Array(8).fill(0));v.push(0);}
+    for(let k=0;k<rows.length;k++){
+      const rk=rows[k];
+      for(let i=0;i<8;i++){
+        v[i]+=rk[i]*b[k];
+        for(let j=i;j<8;j++)M[i][j]+=rk[i]*rk[j];
+      }
+    }
+    for(let i=0;i<8;i++)for(let j=0;j<i;j++)M[i][j]=M[j][i];
+    A=M;rhs=v;
+  }
+  const h=gauss(A,rhs); // [a,b,c,d,e,f,g,h]
   return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
+}
+// Invert a 3x3 homography (adjugate / determinant).
+function invertH(H){
+  const [a,b,c,d,e,f,g,h,i]=H;
+  const A=e*i-f*h, B=c*h-b*i, C=b*f-c*e;
+  const D=f*g-d*i, E=a*i-c*g, F=c*d-a*f;
+  const G=d*h-e*g, Hh=b*g-a*h, I=a*e-b*d;
+  const det=a*A+b*D+c*G;
+  if(!isFinite(det)||Math.abs(det)<1e-12)return null;
+  return [A/det,B/det,C/det,D/det,E/det,F/det,G/det,Hh/det,I/det];
 }
 function gauss(A,b){
   const n=b.length;
@@ -2272,15 +2302,140 @@ function polyArea(p){let a=0;for(let i=0;i<p.length;i++){const j=(i+1)%p.length;
   a+=p[i][0]*p[j][1]-p[j][0]*p[i][1];}return Math.abs(a)/2;}
 
 /* ============================================================
+   Art-frame detection (the inner picture rectangle).
+   ------------------------------------------------------------
+   On every WotC-era card the artwork sits in a gold frame whose boundary is
+   the crispest, most repeatable rectangle on the card. We detect its four
+   edges by scanning gradient profiles inside narrow bands (in normalised card
+   space) where each edge must live, keeping per-scanline peaks consistent via
+   a median pass, robust-fitting a line per edge, and intersecting the lines.
+   Returns 4 corners [TL,TR,BR,BL] as {nx,ny} in natural coords, or null.
+   ============================================================ */
+function detectArtFrame(meta){
+  if(!meta)return null;
+  const {gray,w,h,scale,quadDS}=meta;
+  const [TL,TR,BR,BL]=quadDS;
+  const cardToPx=(u,v)=>{
+    const topx=TL[0]+(TR[0]-TL[0])*u, topy=TL[1]+(TR[1]-TL[1])*u;
+    const botx=BL[0]+(BR[0]-BL[0])*u, boty=BL[1]+(BR[1]-BL[1])*u;
+    return [topx+(botx-topx)*v, topy+(boty-topy)*v];
+  };
+  const samp=(x,y)=>{ // bilinear grayscale sample
+    const xi=x|0, yi=y|0;
+    if(xi<0||yi<0||xi>=w-1||yi>=h-1)return 0;
+    const fx=x-xi, fy=y-yi, i=yi*w+xi;
+    return gray[i]*(1-fx)*(1-fy)+gray[i+1]*fx*(1-fy)
+          +gray[i+w]*(1-fx)*fy+gray[i+w+1]*fx*fy;
+  };
+  const cardW=Math.hypot(TR[0]-TL[0],TR[1]-TL[1]);
+  const cardH=Math.hypot(BL[0]-TL[0],BL[1]-TL[1]);
+  // One edge: scan along `scan` (u or v) across [s0,s1] at several fixed
+  // positions along the other axis in [f0,f1]. Returns a fitted line as two
+  // px endpoints, or null. Scanlines avoid the evo icon (top-left overlap).
+  const findEdge=(axis,s0,s1,f0,f1,innerLast)=>{
+    const NLINES=11;
+    const spanPx=(axis==='u'?cardW:cardH)*(s1-s0);
+    const steps=Math.max(12,Math.min(90,Math.round(spanPx)));
+    const collect=(restrict)=>{
+      const pts=[];
+      for(let li=0;li<NLINES;li++){
+        const f=f0+(f1-f0)*li/(NLINES-1);
+        const prof=[];
+        for(let si=0;si<=steps;si++){
+          const t=s0+(s1-s0)*si/steps;
+          const [px,py]=axis==='u'?cardToPx(t,f):cardToPx(f,t);
+          prof.push(samp(px,py));
+        }
+        // All candidate edges on this scanline, then keep the strong ones and
+        // pick the INNERMOST: the frame<->artwork boundary is the same
+        // physical line on every card, unlike the frame's outer edge whose
+        // relative strength varies between a photo and a scan.
+        const cands=[];let gmax=0;
+        for(let si=2;si<=steps;si++){
+          const grad=Math.abs(prof[si]-prof[si-2])*0.5;
+          const tm=s0+(s1-s0)*(si-1)/steps;
+          if(restrict!==null&&Math.abs(tm-restrict)>0.022)continue;
+          if(grad>5){cands.push([tm,grad]);if(grad>gmax)gmax=grad;}
+        }
+        if(!cands.length)continue;
+        const strong=cands.filter(c=>c[1]>=gmax*0.6);
+        const pick=innerLast?strong[strong.length-1]:strong[0];
+        pts.push({f,t:pick[0],mag:pick[1]});
+      }
+      return pts;
+    };
+    // Pass 1: free peaks; Pass 2: locked to the median position (keeps every
+    // scanline on the SAME physical edge instead of hopping frame<->art lines).
+    let pts=collect(null);
+    if(pts.length<5)return null;
+    const med=pts.map(p=>p.t).sort((a,b)=>a-b)[pts.length>>1];
+    pts=collect(med);
+    if(pts.length<5)return null;
+    // Robust line fit in (f,t): t = a*f + b, trim worst third, refit.
+    const fit=(arr)=>{
+      let sf=0,st=0,sff=0,sft=0,n=arr.length;
+      for(const p of arr){sf+=p.f;st+=p.t;sff+=p.f*p.f;sft+=p.f*p.t;}
+      const den=n*sff-sf*sf;if(Math.abs(den)<1e-9)return null;
+      const a=(n*sft-sf*st)/den, b=(st-a*sf)/n;
+      return {a,b};
+    };
+    let ln=fit(pts);if(!ln)return null;
+    const withRes=pts.map(p=>({p,r:Math.abs(p.t-(ln.a*p.f+ln.b))}))
+      .sort((x,y)=>x.r-y.r);
+    const kept=withRes.slice(0,Math.max(5,Math.ceil(pts.length*0.7))).map(x=>x.p);
+    ln=fit(kept);if(!ln)return null;
+    // Residual sanity: the kept points must hug the line (tight straight edge).
+    let mr=0;for(const p of kept)mr=Math.max(mr,Math.abs(p.t-(ln.a*p.f+ln.b)));
+    if(mr>0.016)return null;
+    // Return two px endpoints plus the edge's normalised position at mid-f
+    // (used by the chooser to confirm both cards locked onto the SAME line).
+    const tAt=f=>ln.a*f+ln.b;
+    const fm=(f0+f1)/2;
+    const e0=axis==='u'?cardToPx(tAt(f0),f0):cardToPx(f0,tAt(f0));
+    const e1=axis==='u'?cardToPx(tAt(f1),f1):cardToPx(f1,tAt(f1));
+    return {line:[e0,e1], frac:tAt(fm)};
+  };
+  // Bands (normalised inner-border space): frame edges with margin, scan
+  // ranges chosen to dodge the evo icon (top-left) and art content.
+  const L=findEdge('u',0.03,0.155,0.20,0.48,true);
+  const R=findEdge('u',0.845,0.97,0.20,0.48,false);
+  const T=findEdge('v',0.03,0.155,0.36,0.78,true);
+  const Bo=findEdge('v',0.475,0.62,0.28,0.72,false);
+  if(!L||!R||!T||!Bo)return null;
+  // Intersect line pairs (each line given as two points).
+  const inter=(A,B)=>{
+    const [x1,y1]=A[0],[x2,y2]=A[1],[x3,y3]=B[0],[x4,y4]=B[1];
+    const d=(x1-x2)*(y3-y4)-(y1-y2)*(x3-x4);
+    if(Math.abs(d)<1e-9)return null;
+    const px=((x1*y2-y1*x2)*(x3-x4)-(x1-x2)*(x3*y4-y3*x4))/d;
+    const py=((x1*y2-y1*x2)*(y3-y4)-(y1-y2)*(x3*y4-y3*x4))/d;
+    return [px,py];
+  };
+  const q=[inter(L.line,T.line),inter(R.line,T.line),inter(R.line,Bo.line),inter(L.line,Bo.line)];
+  if(q.some(p=>!p))return null;
+  // Sanity: convex, plausibly sized (art window is roughly a third of the
+  // card face), and inside the card.
+  const area=polyArea(q), cardA=cardW*cardH;
+  if(area<cardA*0.15||area>cardA*0.60)return null;
+  return {
+    corners:q.map(p=>({nx:p[0]/scale, ny:p[1]/scale})),
+    frac:{L:L.frac, R:R.frac, T:T.frac, B:Bo.frac}
+  };
+}
+
+/* ============================================================
    Hybrid auto-alignment chooser.
-   Given both detected corner results (each carrying .meta), try the accurate
-   interior-landmark path first; fall back to refined corners otherwise.
-   Returns {refPts, userPts, source} with EXACTLY 4 correspondences so the
-   existing 4-point homography renderer is unchanged. source is 'landmarks'
-   or 'corners' (useful for the status hint).
+   Given both detected corner results (each carrying .meta), build the richest
+   available transform:
+     1. BEST: least-squares homography fusing art-frame corners (double
+        weighted, so the inner picture rectangles lock together) with interior
+        print landmarks — then expressed as 4 synthetic corner pairs so the
+        rest of the pipeline (rendering, manual adjust, saving) is unchanged.
+     2. Interior print landmarks alone (4 matched positional marks).
+     3. Fallback: refined border corners.
+   Returns {refPts, userPts, source} with EXACTLY 4 correspondences.
    ============================================================ */
 function buildAutoAlignment(refAuto, userAuto){
-  // Corner fallback is always available when both detections succeeded.
   const cornerFallback=()=>({
     refPts:refAuto.slice(), userPts:userAuto.slice(), source:'corners'
   });
@@ -2289,32 +2444,82 @@ function buildAutoAlignment(refAuto, userAuto){
 
   const refLm=detectLandmarks(refAuto.meta);
   const userLm=detectLandmarks(userAuto.meta);
-  if(!refLm.length||!userLm.length) return cornerFallback();
-
-  // Match by landmark key (same fixed layout position on both cards).
   const byKey=arr=>{const m={};for(const p of arr)m[p.key]=p;return m;};
   const rK=byKey(refLm), uK=byKey(userLm);
   const matched=[];
   for(const a of LANDMARK_ANCHORS){
     if(rK[a.key]&&uK[a.key]) matched.push({key:a.key, r:rK[a.key], u:uK[a.key]});
   }
-  // Need 4 well-spread matches to drive the perspective transform directly.
-  // With fewer, the corners (which always span the full card) are safer.
-  if(matched.length<4) return cornerFallback();
 
-  // Spread check: the 4 matched points must enclose a meaningful area on BOTH
-  // cards (guards against all four collapsing onto one region from a misfire).
-  const rQuad=matched.map(m=>[m.r.nx,m.r.ny]);
-  const uQuad=matched.map(m=>[m.u.nx,m.u.ny]);
-  const rImgA=refAuto.meta.w*refAuto.meta.h/(refAuto.meta.scale*refAuto.meta.scale);
-  const uImgA=userAuto.meta.w*userAuto.meta.h/(userAuto.meta.scale*userAuto.meta.scale);
-  if(polyArea(rQuad)<rImgA*0.10||polyArea(uQuad)<uImgA*0.10) return cornerFallback();
+  // ---- Path 1: art frame (needs the frame on BOTH cards) ----
+  const rFrameRes=detectArtFrame(refAuto.meta);
+  const uFrameRes=detectArtFrame(userAuto.meta);
+  let frameOK=false, rFrame=null, uFrame=null;
+  if(rFrameRes&&uFrameRes){
+    // Consistency guard: it's the same card design, so each frame edge must
+    // sit at (nearly) the same normalised position on both cards. If any edge
+    // disagrees, the two detections locked onto different physical lines —
+    // using them would actively MISalign, so fall through instead.
+    const rf=rFrameRes.frac, uf=uFrameRes.frac;
+    frameOK=['L','R','T','B'].every(k=>Math.abs(rf[k]-uf[k])<=0.025);
+    if(frameOK){rFrame=rFrameRes.corners;uFrame=uFrameRes.corners;}
+  }
+  if(frameOK){
+    const src=[],dst=[];
+    // Frame corners, pushed twice = double weight in the least-squares solve:
+    // lining up the inner picture rectangle is the visual priority.
+    for(let rep=0;rep<2;rep++)for(let i=0;i<4;i++){
+      src.push({x:uFrame[i].nx,y:uFrame[i].ny});
+      dst.push({x:rFrame[i].nx,y:rFrame[i].ny});
+    }
+    // Landmarks extend coverage to the bottom of the card so the lower half
+    // doesn't hinge on extrapolation from the (upper-card) frame.
+    for(const m of matched){
+      src.push({x:m.u.nx,y:m.u.ny});
+      dst.push({x:m.r.nx,y:m.r.ny});
+    }
+    // Also anchor gently with the outer border corners (once each) so the
+    // card's outside edges can't drift while the frame locks the inside.
+    for(let i=0;i<4;i++){
+      src.push({x:userAuto[i].nx,y:userAuto[i].ny});
+      dst.push({x:refAuto[i].nx,y:refAuto[i].ny});
+    }
+    const H=solveHomography(src,dst); // user-natural -> ref-natural
+    const Hi=invertH(H);
+    if(Hi){
+      // Express the fused transform as 4 synthetic pairs at the ref's outer
+      // corners (max spread), mapping each back into user space.
+      const refPts=[],userPts=[];let ok=true;
+      for(let i=0;i<4;i++){
+        const rp=refAuto[i];
+        const up=applyH(Hi,rp.nx,rp.ny);
+        if(!isFinite(up.x)||!isFinite(up.y)){ok=false;break;}
+        refPts.push({nx:rp.nx,ny:rp.ny});
+        userPts.push({nx:up.x,ny:up.y});
+      }
+      // Sanity: synthetic user quad must be convex-ish and plausibly sized.
+      if(ok){
+        const uq=userPts.map(p=>[p.nx,p.ny]);
+        const uA=userAuto.meta.w*userAuto.meta.h
+                /(userAuto.meta.scale*userAuto.meta.scale);
+        if(polyArea(uq)>uA*0.10) return {refPts,userPts,source:'frame'};
+      }
+    }
+  }
 
-  // Correspondence is already key-aligned: matched[i] is the same landmark on
-  // both cards, so index i pairs correctly for the homography solve.
-  const refPts=[], userPts=[];
-  for(const m of matched){ refPts.push({nx:m.r.nx,ny:m.r.ny}); userPts.push({nx:m.u.nx,ny:m.u.ny}); }
-  return {refPts, userPts, source:'landmarks'};
+  // ---- Path 2: interior landmarks alone ----
+  if(matched.length>=4){
+    const rQuad=matched.map(m=>[m.r.nx,m.r.ny]);
+    const uQuad=matched.map(m=>[m.u.nx,m.u.ny]);
+    const rImgA=refAuto.meta.w*refAuto.meta.h/(refAuto.meta.scale*refAuto.meta.scale);
+    const uImgA=userAuto.meta.w*userAuto.meta.h/(userAuto.meta.scale*userAuto.meta.scale);
+    if(polyArea(rQuad)>=rImgA*0.10&&polyArea(uQuad)>=uImgA*0.10){
+      const refPts=[], userPts=[];
+      for(const m of matched){ refPts.push({nx:m.r.nx,ny:m.r.ny}); userPts.push({nx:m.u.nx,ny:m.u.ny}); }
+      return {refPts, userPts, source:'landmarks'};
+    }
+  }
+  return cornerFallback();
 }
 
 function computeAndDraw(){
