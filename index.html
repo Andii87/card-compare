@@ -1325,7 +1325,13 @@ function loadFile(file,cb,onFail){
       if(!methods.length){
         if(tries>0){ setStatus('Read failed, retrying… ('+lastErr+')');
           setTimeout(()=>attempt([readViaFR,readViaAB],tries-1),350); return; }
-        failHard('FileReader error: '+lastErr+' (this file isn\'t readable — if it\'s in Google Photos/Drive, download it to the phone, or pick it from the Files app)');
+        // Last resort: skip reading bytes entirely and hand the original File
+        // straight to the decoder via a blob URL. Chrome streams this through
+        // a different path that usually works for Google Photos picker items
+        // even when FileReader/arrayBuffer throw NotReadableError. The <img>
+        // route auto-applies EXIF rotation, so orientation stays correct.
+        setStatus('Byte read failed ('+lastErr+') — trying direct decode…');
+        tryImg(srcFile,'bytes unreadable: '+lastErr);
         return;
       }
       const m=methods[0];
