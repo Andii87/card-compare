@@ -1855,28 +1855,58 @@ let alignMode=2; // set when alignment is computed: 2=similarity, 4=perspective
 // correspondences (art-frame corners + print landmarks) into one transform.
 function solveHomography(src,dst){
   const n=Math.min(src.length,dst.length);
-  const rows=[],b=[];
-  for(let i=0;i<n;i++){
-    const sx=src[i].x,sy=src[i].y,dx=dst[i].x,dy=dst[i].y;
-    rows.push([sx,sy,1,0,0,0,-sx*dx,-sy*dx]); b.push(dx);
-    rows.push([0,0,0,sx,sy,1,-sx*dy,-sy*dy]); b.push(dy);
+  if(n<=4){ // classic exact 4-point solve (manual align path, unchanged)
+    const A=[],b=[];
+    for(let i=0;i<4;i++){
+      const sx=src[i].x,sy=src[i].y,dx=dst[i].x,dy=dst[i].y;
+      A.push([sx,sy,1,0,0,0,-sx*dx,-sy*dx]); b.push(dx);
+      A.push([0,0,0,sx,sy,1,-sx*dy,-sy*dy]); b.push(dy);
+    }
+    const h=gauss(A,b);
+    return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
   }
-  let A=rows,rhs=b;
-  if(n>4){ // normal equations: 8x8 regardless of point count
-    const M=[],v=[];
-    for(let r=0;r<8;r++){M.push(new Array(8).fill(0));v.push(0);}
-    for(let k=0;k<rows.length;k++){
-      const rk=rows[k];
-      for(let i=0;i<8;i++){
-        v[i]+=rk[i]*b[k];
-        for(let j=i;j<8;j++)M[i][j]+=rk[i]*rk[j];
+  // Least-squares with 5+ points. Normal equations SQUARE the conditioning,
+  // so raw pixel coords (thousands) mixed with the constant 1 column destroy
+  // precision. Hartley normalisation first: centre each point set on its
+  // centroid and scale mean distance to sqrt(2); solve; then denormalise.
+  const norm=(pts)=>{
+    let cx=0,cy=0;for(const p of pts){cx+=p.x;cy+=p.y;}
+    cx/=pts.length;cy/=pts.length;
+    let d=0;for(const p of pts)d+=Math.hypot(p.x-cx,p.y-cy);
+    d/=pts.length;
+    const s=d>1e-9?Math.SQRT2/d:1;
+    return {s,cx,cy};
+  };
+  const Ns=norm(src),Nd=norm(dst);
+  const M=[],v=[];
+  for(let r=0;r<8;r++){M.push(new Array(8).fill(0));v.push(0);}
+  for(let i=0;i<n;i++){
+    const sx=(src[i].x-Ns.cx)*Ns.s, sy=(src[i].y-Ns.cy)*Ns.s;
+    const dx=(dst[i].x-Nd.cx)*Nd.s, dy=(dst[i].y-Nd.cy)*Nd.s;
+    const rows=[[sx,sy,1,0,0,0,-sx*dx,-sy*dx],[0,0,0,sx,sy,1,-sx*dy,-sy*dy]];
+    const bs=[dx,dy];
+    for(let q=0;q<2;q++){
+      const rk=rows[q];
+      for(let a=0;a<8;a++){
+        v[a]+=rk[a]*bs[q];
+        for(let c=a;c<8;c++)M[a][c]+=rk[a]*rk[c];
       }
     }
-    for(let i=0;i<8;i++)for(let j=0;j<i;j++)M[i][j]=M[j][i];
-    A=M;rhs=v;
   }
-  const h=gauss(A,rhs); // [a,b,c,d,e,f,g,h]
-  return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
+  for(let a=0;a<8;a++)for(let c=0;c<a;c++)M[a][c]=M[c][a];
+  const h=gauss(M,v);
+  const Hn=[h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
+  // Denormalise: H = Td^-1 * Hn * Ts
+  const Ts=[Ns.s,0,-Ns.s*Ns.cx, 0,Ns.s,-Ns.s*Ns.cy, 0,0,1];
+  const Tdi=[1/Nd.s,0,Nd.cx, 0,1/Nd.s,Nd.cy, 0,0,1];
+  const mul=(P,Q)=>{const R=new Array(9).fill(0);
+    for(let r=0;r<3;r++)for(let c=0;c<3;c++)for(let k=0;k<3;k++)
+      R[r*3+c]+=P[r*3+k]*Q[k*3+c];
+    return R;};
+  const H=mul(mul(Tdi,Hn),Ts);
+  // Scale so H[8]=1 (applyH divides through, but keep the convention).
+  if(Math.abs(H[8])>1e-12)for(let i=0;i<9;i++)H[i]/=H[8];
+  return H;
 }
 // Invert a 3x3 homography (adjugate / determinant).
 function invertH(H){
@@ -2485,7 +2515,19 @@ function buildAutoAlignment(refAuto, userAuto){
       dst.push({x:refAuto[i].nx,y:refAuto[i].ny});
     }
     const H=solveHomography(src,dst); // user-natural -> ref-natural
-    const Hi=invertH(H);
+    // Reprojection guard: the solved transform must actually satisfy its own
+    // correspondences. If detection fed it inconsistent points, the residual
+    // blows up — reject and fall through rather than render a bad warp.
+    const diag=Math.hypot(refAuto[2].nx-refAuto[0].nx, refAuto[2].ny-refAuto[0].ny)||1;
+    let errSum=0,errMax=0,bad=false;
+    for(let i=0;i<src.length;i++){
+      const p=applyH(H,src[i].x,src[i].y);
+      if(!isFinite(p.x)||!isFinite(p.y)){bad=true;break;}
+      const e=Math.hypot(p.x-dst[i].x,p.y-dst[i].y);
+      errSum+=e;if(e>errMax)errMax=e;
+    }
+    const reprojOK=!bad&&(errSum/src.length)<diag*0.012&&errMax<diag*0.03;
+    const Hi=reprojOK?invertH(H):null;
     if(Hi){
       // Express the fused transform as 4 synthetic pairs at the ref's outer
       // corners (max spread), mapping each back into user space.
