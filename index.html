@@ -388,7 +388,7 @@ if('serviceWorker' in navigator){
 </head>
 <body>
 <header>
-  <div class="eyebrow">Card Comparison</div>
+  <div class="eyebrow">Card Comparison <span style="font-size:11px;color:var(--muted);font-weight:600;letter-spacing:0;-webkit-text-fill-color:var(--muted)">v4</span></div>
 </header>
 
 <div class="stage" id="stage">
@@ -2246,6 +2246,29 @@ function detectCorners(img){
     if(!(ra>qa*0.7&&ra<qa*1.4)) useRefined=false;
     for(const p of refined){if(!isFinite(p[0])||!isFinite(p[1]))useRefined=false;}
     const out=useRefined?refined:quad;
+    // -----------------------------------------------------------------------
+    // Shape sanity: a real card quad, photographed at any sensible angle, has
+    // near-right-angle corners and near-equal diagonals. Backgrounds that fool
+    // the colour detector (fingers holding the card, tan desks) produce wildly
+    // skewed quads — reject those so the app honestly asks for manual align
+    // instead of feeding garbage into every downstream alignment step.
+    {
+      const ang=(a,b,c)=>{ // angle at b in degrees
+        const v1=[a[0]-b[0],a[1]-b[1]], v2=[c[0]-b[0],c[1]-b[1]];
+        const d=v1[0]*v2[0]+v1[1]*v2[1];
+        const n=(Math.hypot(v1[0],v1[1])*Math.hypot(v2[0],v2[1]))||1e-9;
+        return Math.acos(Math.max(-1,Math.min(1,d/n)))*180/Math.PI;
+      };
+      for(let i=0;i<4;i++){
+        const A=out[(i+3)%4], B=out[i], C=out[(i+1)%4];
+        const a=ang(A,B,C);
+        if(a<74||a>106) return null;
+      }
+      const d1=Math.hypot(out[2][0]-out[0][0],out[2][1]-out[0][1]);
+      const d2=Math.hypot(out[3][0]-out[1][0],out[3][1]-out[1][1]);
+      const dr=d1/(d2||1e-9);
+      if(dr<0.9||dr>1.112) return null;
+    }
     // -----------------------------------------------------------------------
 
     const result=out.map(p=>({nx:p[0]/scale, ny:p[1]/scale}));
