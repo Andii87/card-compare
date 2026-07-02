@@ -1,0 +1,2788 @@
+<!DOCTYPE html>
+<!--
+  Card Comparison Tool
+  Copyright (c) 2026. All rights reserved.
+  This work may not be copied, redistributed, or republished without permission.
+  Pokémon and card images are the property of their respective owners; this tool
+  is an independent utility and is not affiliated with or endorsed by them.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d0b14">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script>
+// Register the service worker so the app installs and works offline.
+// Only runs when served over https (or localhost) — harmless otherwise.
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>{
+    navigator.serviceWorker.register('./sw.js').catch(()=>{});
+  });
+}
+</script>
+<title>Card Comparison</title>
+<style>
+  :root{
+    --bg:#0d0b14; --panel:#161222; --ink:#ECE7FF; --muted:#8E86A8;
+    --flame:#FF7A18; --ember:#FFC23C; --line:#2A2440;
+    --holo2:#22D3EE; --ok:#3DDC84;
+    --glow1:rgba(123,92,255,.18); --glow2:rgba(255,122,24,.12);
+    --stage:#08060f; --chip:rgba(13,11,20,.6); --chip-solid:#241d38; --onAccent:#1a0e00;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:
+      radial-gradient(900px 500px at 80% -10%, var(--glow1), transparent 60%),
+      radial-gradient(700px 500px at 0% 110%, var(--glow2), transparent 55%),
+      var(--bg);
+    color:var(--ink);
+    font-family:'Inter',system-ui,-apple-system,sans-serif;
+    min-height:100vh; padding:clamp(12px,2.5vh,24px) clamp(16px,4vw,40px);
+  }
+  header{max-width:760px;margin:0 auto 12px;text-align:center}
+  .eyebrow{font-size:clamp(20px,4vw,30px);letter-spacing:.04em;text-transform:uppercase;
+    background:linear-gradient(90deg,var(--flame),var(--ember));-webkit-background-clip:text;
+    background-clip:text;color:transparent;font-weight:800;margin-bottom:4px}
+  h1{font-size:clamp(24px,5vw,38px);line-height:1.05;font-weight:800;letter-spacing:-.02em}
+  h1 .grad{background:linear-gradient(90deg,var(--flame),var(--ember));-webkit-background-clip:text;background-clip:text;color:transparent}
+  header p{color:var(--muted);margin-top:12px;font-size:15px;max-width:54ch}
+  .stage{max-width:760px;margin:0 auto}
+  .steps{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 auto 14px;
+    width:var(--cmpw,100%);max-width:100%}
+  .step{border:1px solid var(--line);background:var(--panel);
+    border-radius:11px;padding:10px 13px;font-size:13px;color:var(--muted);font-family:inherit;
+    display:flex;gap:9px;align-items:center;justify-content:center;transition:.2s;cursor:pointer;text-align:center}
+  @media (hover:hover){
+    .step:not(:disabled):hover{border-color:var(--flame);color:var(--ink);transform:translateY(-1px)}
+  }
+  .step:disabled{opacity:.45;cursor:not-allowed}
+  .step:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+  .step .num{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+    background:var(--chip-solid);color:var(--muted);font-weight:800;font-size:12px;flex:none}
+  .step.active{border-color:var(--flame);color:var(--ink);animation:stepflash 1.8s ease-in-out infinite}
+  .step.active .num{background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent)}
+  .step.done:not(.active){border-color:var(--line)!important;transform:none!important}
+  .step.done .num{background:var(--ok);color:#06210f}
+  /* The active step gently pulses to show the user where to act next. The done
+     state cancels it. Respects reduced-motion below. */
+  @keyframes stepflash{
+    0%,100%{box-shadow:0 0 0 0 rgba(255,122,24,0)}
+    50%{box-shadow:0 0 0 3px rgba(255,150,40,.42),0 0 12px 1px rgba(255,150,40,.25)}
+  }
+  .step.done.active{animation:none}
+  .compare{position:relative;width:auto;aspect-ratio:5/7;
+    max-height:62vh;max-width:100%;margin:0 auto;
+    border-radius:18px;overflow:hidden;
+    background:var(--stage);border:1px solid var(--line);
+    box-shadow:0 30px 80px -30px rgba(0,0,0,.8);user-select:none;touch-action:none}
+  .layer{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}
+  .layer canvas{width:100%;height:100%;display:block;background:var(--stage)}
+  .top{clip-path:inset(0 50% 0 0)}
+  .tag{position:absolute;top:9px;font-size:8.25px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+    padding:4px 7.5px;border-radius:999px;backdrop-filter:blur(8px);
+    background:var(--chip);border:1px solid var(--line);pointer-events:none;z-index:6}
+  .tag.left{left:9px;color:var(--ok)} .tag.right{right:9px;color:var(--ember)}
+  .handle{position:absolute;top:0;bottom:0;left:50%;width:2px;
+    background:linear-gradient(180deg,var(--flame),var(--ember));transform:translateX(-1px);cursor:ew-resize;z-index:5;
+    transition:opacity .12s ease}
+  .grip{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:44px;height:44px;border-radius:50%;
+    background:var(--ink);color:#0d0b14;display:grid;place-items:center;font-size:16px;font-weight:900;
+    box-shadow:0 6px 20px rgba(0,0,0,.5);cursor:ew-resize}
+  .empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:var(--muted);
+    font-size:14px;padding:24px;gap:6px;z-index:3;
+    background:repeating-linear-gradient(45deg,#0b0913,#0b0913 12px,#0e0b18 12px,#0e0b18 24px)}
+  .empty strong{color:var(--ink);font-size:15px}
+  /* Before any card is uploaded, hide the swipe divider, grip and corner tags so
+     the welcome panel is unobstructed and its buttons are clickable. */
+  .compare.pre-upload .handle,
+  .compare.pre-upload .tag{display:none}
+  /* The top layer sits above the bottom layer (which holds the welcome panel),
+     so before upload it must not intercept clicks meant for the panel buttons. */
+  .compare.pre-upload .top{pointer-events:none}
+  /* Onboarding: a friendly three-step explainer shown on the empty stage. */
+  .onboard{position:absolute;inset:0;z-index:9;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;text-align:center;padding:26px;
+    background:radial-gradient(120% 90% at 50% 0%,rgba(123,92,255,.10),transparent 60%),var(--stage)}
+  .onboard.hide{display:none}
+  .onboard-icon{width:54px;height:54px;border-radius:14px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--flame),var(--ember));color:var(--onAccent);
+    box-shadow:0 10px 30px -8px rgba(255,122,24,.5)}
+  .onboard h3{color:var(--ink);font-size:17px;font-weight:800;letter-spacing:-.01em}
+  .onboard-steps{display:grid;grid-template-columns:1fr 1fr;gap:10px;justify-content:center;
+    max-width:440px;width:100%}
+  .onboard-card{background:var(--panel);
+    border:1px solid var(--line);border-radius:13px;padding:14px 12px;
+    display:flex;flex-direction:column;gap:7px;align-items:center;text-align:center;transition:.2s}
+  .onboard-card .oc-num{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+    background:var(--chip-solid);color:var(--ember);font-weight:800;font-size:13px;flex:none}
+  .onboard-card .oc-t{color:var(--ink);font-size:13px;font-weight:700}
+  .onboard-card .oc-d{color:var(--muted);font-size:11.5px;line-height:1.4}
+  .onboard-hint{color:var(--muted);font-size:11.5px;max-width:42ch;line-height:1.5}
+  @media(max-width:520px){
+    .onboard-steps{gap:7px}.onboard-card{padding:11px 8px}
+    .onboard h3{font-size:15px}.onboard{gap:14px}
+  }
+  /* Skeleton shimmer shown over a layer while an image decodes/detects. */
+  .skel{position:absolute;inset:0;z-index:7;overflow:hidden;background:var(--stage);
+    display:flex;align-items:center;justify-content:center}
+  .skel.hide{display:none}
+  .skel::after{content:"";position:absolute;inset:0;
+    background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.08) 50%,transparent 70%);
+    transform:translateX(-100%);animation:skelsweep 1.15s ease-in-out infinite}
+  .skel-card{width:62%;aspect-ratio:5/7;border-radius:12px;border:1px solid var(--line);
+    background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.015));
+    display:flex;align-items:flex-end;justify-content:center;padding-bottom:14px}
+  .skel-label{font-size:11.5px;color:var(--muted);letter-spacing:.05em;text-transform:uppercase;
+    display:flex;align-items:center;gap:8px}
+  .skel-spinner{width:13px;height:13px;border-radius:50%;border:2px solid var(--line);
+    border-top-color:var(--ember);animation:skelspin .7s linear infinite}
+  @keyframes skelsweep{to{transform:translateX(100%)}}
+  @keyframes skelspin{to{transform:rotate(360deg)}}
+  /* Mode-switch fade: applied briefly to the stage when the view changes. */
+  .layer canvas,#sidebyside,.onion{transition:opacity .22s ease}
+  .compare.switching .layer canvas{opacity:0}
+  .stage.mode-fade #sidebyside,.stage.mode-fade .onion{opacity:0}
+  /* Auto-align success flash: a quick ring pulse around the stage. */
+  .compare.aligned-flash::after{content:"";position:absolute;inset:0;z-index:8;pointer-events:none;
+    border-radius:18px;box-shadow:inset 0 0 0 2px var(--ok),0 0 24px -2px var(--ok);
+    animation:alignpulse .9s ease-out forwards}
+  @keyframes alignpulse{0%{opacity:0}18%{opacity:1}100%{opacity:0}}
+  @media(prefers-reduced-motion:reduce){
+    .skel::after,.skel-spinner{animation:none}
+    .compare.aligned-flash::after{animation:none}
+    .step.active{animation:none}
+    .layer canvas,#sidebyside,.onion{transition:none}
+  }
+  /* Drag-and-drop affordance on the stage. */
+  .compare.dragover,.sidebyside.dragover{outline:2px dashed var(--ember);outline-offset:-6px}
+  .compare.dragover::before,.sidebyside.dragover::before{content:"Drop image to load";position:absolute;inset:0;z-index:30;
+    display:grid;place-items:center;font-size:15px;font-weight:700;color:var(--ink);
+    background:rgba(8,6,15,.6);backdrop-filter:blur(3px);pointer-events:none}
+  .sidebyside{position:relative}
+  .pickwrap{position:absolute;inset:0;z-index:20;display:none;background:var(--stage)}
+  .pickwrap.show{display:flex;flex-direction:column}
+  .pickhead{flex:none;padding:10px 12px;background:linear-gradient(180deg,rgba(8,6,15,.96),transparent);
+    display:flex;justify-content:center}
+  .pickmodewrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center}
+  .pickmodelabel{font-size:12px;color:var(--muted);font-weight:600}
+  .pickstage{flex:1;position:relative;overflow:hidden;touch-action:none}
+  .pickpan{position:absolute;inset:0;transform-origin:0 0;will-change:transform}
+  .pickcanvas{width:100%;height:100%;display:block;background:var(--stage);cursor:crosshair}
+  .dotlayer{position:absolute;inset:0;pointer-events:none}
+  .pickbar{flex:none;padding:12px 14px;
+    background:linear-gradient(0deg,rgba(8,6,15,.96),transparent);
+    font-size:13px;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;text-align:center}
+  .pickbar #pickMsg{width:100%}
+  .pickbar b{color:var(--ember)}
+  .pickactions{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap}
+  .pickactions .btn{padding:8px 12px;font-size:13px}
+  .pickzoom{display:inline-flex;align-items:center;gap:6px}
+  .pickzoom.active{background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent);border:none}
+  .dot{position:absolute;width:26px;height:26px;margin:0;transform:translate(-50%,-50%);box-sizing:border-box;border-radius:50%;
+    border:2px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.55);pointer-events:none;
+    display:grid;place-items:center;font-size:12px;font-weight:800;color:#fff;z-index:21}
+  .dot.a{background:rgba(255,122,24,.9)} .dot.b{background:rgba(34,211,238,.9)}
+  .controls{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px;justify-content:center;align-items:center}
+  .zoomicon{font-size:16px;line-height:1;vertical-align:-1px}
+  .iconbtn{display:inline-flex;align-items:center;gap:7px}
+  .iconbtn svg{flex:none}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--panel);color:var(--ink);
+    font:inherit;font-weight:600;font-size:14px;padding:11px 18px;border-radius:11px;cursor:pointer;transition:.15s}
+  .btn:hover{border-color:var(--flame);transform:translateY(-1px)}
+  .btn.primary{background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent);border:none}
+  .btn:disabled{opacity:.4;cursor:not-allowed;transform:none;border-color:var(--line)}
+  .btn:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+  .hint{text-align:center;color:var(--muted);font-size:12.5px;margin-top:10px;line-height:1.5}
+  input[type=file]{display:none}
+  .onion{display:none;align-items:center;gap:10px;margin:10px auto 0;max-width:760px;
+    padding:0 4px;color:var(--muted);font-size:13px}
+  .onion.show{display:flex}
+  .onion label{font-weight:600;white-space:nowrap}
+  .onion input[type=range]{flex:1;accent-color:var(--flame);cursor:pointer;height:4px}
+  .onion .val{width:42px;text-align:right;color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+  .pickmode{display:flex;gap:6px;background:var(--chip);border:1px solid var(--line);
+    border-radius:10px;padding:4px}
+  .pickmode button{appearance:none;border:none;background:transparent;color:var(--muted);
+    font:inherit;font-weight:700;font-size:13px;padding:7px 14px;border-radius:7px;cursor:pointer;
+    display:flex;flex-direction:column;align-items:center;line-height:1.15;gap:1px}
+  .pickmode button small{font-size:10px;font-weight:600;opacity:.8;letter-spacing:.01em}
+  .pickmode button.active{background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent)}
+  .dot.c{background:rgba(61,220,132,.9)} .dot.d{background:rgba(123,92,255,.9)}
+  .modebar{display:flex;gap:6px;margin:0 auto 12px;background:var(--panel);
+    border:1px solid var(--line);border-radius:12px;padding:5px;width:fit-content}
+  .modebtn{appearance:none;border:none;background:transparent;color:var(--muted);
+    font:inherit;font-weight:600;font-size:13px;padding:8px 16px;border-radius:8px;cursor:pointer;transition:.15s}
+  .modebtn:hover{color:var(--ink)}
+  .modebtn.active{background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent)}
+  .sidebyside{display:none;gap:12px;grid-template-columns:1fr 1fr}
+  .sidebyside.show{display:grid}
+  .sbs-col{position:relative;border-radius:16px;overflow:hidden;background:var(--stage);
+    border:1px solid var(--line);aspect-ratio:5/7;max-height:62vh}
+  .sbs-col canvas{width:100%;height:100%;display:block;background:var(--stage)}
+  .sbs-tag{position:absolute;top:10px;font-size:10px;font-weight:700;letter-spacing:.12em;
+    text-transform:uppercase;padding:4px 9px;border-radius:999px;backdrop-filter:blur(8px);
+    background:var(--chip);border:1px solid var(--line);z-index:2}
+  .sbs-tag.left{left:10px;color:var(--ok)} .sbs-tag.right{right:10px;color:var(--ember)}
+  .sbs-toggle{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);z-index:3;
+    display:flex;gap:3px;background:var(--chip);border:1px solid var(--line);
+    border-radius:8px;padding:3px;backdrop-filter:blur(8px)}
+  .sbs-toggle button{appearance:none;border:none;background:transparent;color:var(--muted);
+    font:inherit;font-weight:700;font-size:10px;letter-spacing:.04em;text-transform:uppercase;
+    padding:5px 10px;border-radius:6px;cursor:pointer}
+  .sbs-toggle button.active{background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent)}
+  @media (max-width: 640px){
+    body{padding:8px 10px;min-height:100dvh}
+    header{margin:0 auto 6px}
+    .eyebrow{font-size:18px;margin-bottom:0}
+    .steps{gap:5px;margin-bottom:8px}
+    /* keep all four steps on one row, compact */
+    .step{min-width:0;flex:1 1 0;padding:7px 6px;font-size:10.5px;gap:5px;border-radius:9px}
+    .step .num{width:17px;height:17px;font-size:10px}
+    .step span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .modebar{margin:0 auto 8px;gap:4px}
+    .compare{max-height:none;height:auto;flex:1 1 auto;min-height:120px;width:100%;
+      aspect-ratio:auto;max-width:100%}
+    /* stage becomes a column that fills the screen; compare takes the slack
+       so the controls and hint below it are always visible without scrolling */
+    .stage{display:flex;flex-direction:column;height:calc(100dvh - 16px)}
+    #viewport{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+    .controls{margin:8px auto 0;gap:6px;flex-wrap:wrap}
+    .controls .btn{padding:8px 9px;font-size:12px}
+    .controls .btn span{font-size:12px}
+    .hint{font-size:11px;margin-top:6px}
+  }
+  /* Portrait phones: keep both cards literally side by side. Each column is
+     half the row width; its 5:7 aspect sets the height and the canvas letter-
+     boxes the whole card inside, so nothing is cropped. The rotate hint offers
+     a larger landscape view. */
+  @media (max-width: 640px) and (orientation: portrait){
+    .sidebyside.show{grid-template-columns:1fr 1fr;gap:6px;align-items:start}
+    .sbs-col{aspect-ratio:5/7;max-height:none;width:100%}
+    .stage.side-active .rotatehint{display:flex}
+  }
+  /* Landscape phones (short, wide viewport), NOT fullscreen: the base 1fr 1fr grid
+     stretches each column across half a wide screen, leaving the two cards pinned
+     to the far edges. Instead size each column to the card's actual width (derived
+     from the available height via the 5:7 ratio) and centre the pair with a small
+     gap so the cards sit right next to each other. */
+  @media (max-height: 640px) and (orientation: landscape){
+    .sidebyside.show{grid-template-columns:auto auto;justify-content:center;
+      align-items:center;gap:12px;width:100%}
+    .sbs-col{height:min(84vh,86vw);max-height:none;width:auto;aspect-ratio:5/7}
+    .sbs-col canvas{width:auto;height:100%}
+  }
+  @media (max-width: 430px){
+    .controls .iconbtn span{display:none}
+    .controls .iconbtn{padding:9px}
+  }
+  /* "Rotate your phone" hint shown only in portrait side-by-side. */
+  .rotatehint{display:none;align-items:center;justify-content:center;gap:8px;
+    margin:8px auto 0;padding:8px 12px;max-width:760px;
+    background:var(--chip);border:1px solid var(--line);border-radius:10px;
+    color:var(--muted);font-size:12px;font-weight:600}
+  .rotatehint svg{flex:none}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important}}
+  #viewport:fullscreen{background:var(--bg);padding:16px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:12px}
+  #viewport:-webkit-full-screen{background:var(--bg);padding:16px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:12px}
+  #viewport:fullscreen .compare{height:90vh;max-height:90vh;width:auto;max-width:96vw;aspect-ratio:5/7}
+  #viewport:-webkit-full-screen .compare{height:90vh;max-height:90vh;width:auto;max-width:96vw;aspect-ratio:5/7}
+  #viewport:fullscreen .sbs-col{max-height:90vh;aspect-ratio:5/7;height:auto;width:100%}
+  #viewport:-webkit-full-screen .sbs-col{max-height:90vh;aspect-ratio:5/7;height:auto;width:100%}
+  #viewport:fullscreen .sidebyside.show{height:auto;max-height:92vh;width:96vw;grid-template-columns:1fr 1fr;gap:10px;align-items:center}
+  #viewport:-webkit-full-screen .sidebyside.show{height:auto;max-height:92vh;width:96vw;grid-template-columns:1fr 1fr;gap:10px;align-items:center}
+  #viewport:fullscreen .modebar{margin:0}
+  /* fullscreen: float the overlay opacity slider over the bottom of the stage */
+  #viewport:fullscreen .onion.show,#viewport:-webkit-full-screen .onion.show{
+    position:fixed;left:50%;bottom:28px;transform:translateX(-50%);margin:0;z-index:31;
+    width:min(620px,80vw);background:var(--chip);backdrop-filter:blur(10px);
+    border:1px solid var(--line);border-radius:14px;padding:12px 18px;
+    transition:opacity .15s ease}
+  #viewport:fullscreen .onion.dragging,#viewport:-webkit-full-screen .onion.dragging{
+    opacity:0;pointer-events:none}
+  .fsexit{display:none}
+  #viewport:fullscreen .fsexit,#viewport:-webkit-full-screen .fsexit{
+    display:grid;place-items:center;position:absolute;top:14px;right:14px;z-index:30;
+    width:42px;height:42px;border-radius:50%;cursor:pointer;
+    background:var(--chip);border:1px solid var(--line);color:var(--ink);backdrop-filter:blur(8px)}
+  .fsexit:hover{border-color:var(--flame)}
+  /* saved-comparison library modal */
+  .modal{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
+    background:rgba(5,4,10,.72);backdrop-filter:blur(6px);padding:18px}
+  .modal.show{display:flex}
+  .modal-card{width:min(880px,96vw);max-height:88vh;display:flex;flex-direction:column;
+    background:var(--panel);border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    padding:16px 20px;border-bottom:1px solid var(--line)}
+  .modal-head h2{margin:0;font-size:18px}
+  .modal-head-actions{display:flex;gap:8px;align-items:center}
+  /* gallery header: title on its own line, buttons wrap below */
+  .modal-head.stacked{flex-direction:column;align-items:stretch;gap:12px}
+  .modal-head.stacked h2{text-align:center}
+  .modal-head.stacked .modal-head-actions{flex-wrap:nowrap;justify-content:center;gap:8px}
+  .modal-head.stacked #galleryClose{margin-left:auto}
+  .gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;
+    padding:18px;overflow:auto}
+  .gallery-empty{padding:34px 20px 40px;text-align:center;color:var(--muted);margin:0}
+  .gcard{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#171226;
+    display:flex;flex-direction:column;cursor:pointer;transition:border-color .15s,transform .1s}
+  .gcard:hover{border-color:var(--flame);transform:translateY(-2px)}
+  /* Show the FULL cards (no cropping). Each half holds one card at 5:7 and
+     let-boxes it with object-fit:contain, so the whole card is visible. */
+  .gcard .thumbs{display:flex;background:#0d0b14}
+  .gcard .thumbs img{width:50%;aspect-ratio:5/7;height:auto;object-fit:contain;display:block;background:#0d0b14}
+  .gcard .thumbs img:first-child{border-right:1px solid var(--line)}
+  .gcard .meta{padding:8px 10px;display:flex;flex-direction:column;gap:4px}
+  .gcard .gname{font-size:13px;font-weight:700;line-height:1.2;word-break:break-word}
+  .gcard .gsub{font-size:11px;color:var(--muted)}
+  .gcard .grow{display:flex;gap:6px;margin-top:6px}
+  .gcard .grow button{flex:1;font-size:11px;padding:5px 6px;border-radius:7px;border:1px solid var(--line);
+    background:var(--panel);color:var(--ink);cursor:pointer}
+  .gcard .grow button:hover{border-color:var(--flame)}
+  .gcard .grow button.del:hover{border-color:#e0556b;color:#ff8a9c}
+  /* selection mode for bulk delete */
+  .gcard{position:relative}
+  .gcard .selbox{position:absolute;top:8px;left:8px;width:26px;height:26px;border-radius:7px;
+    border:2px solid rgba(255,255,255,.65);background:rgba(10,8,18,.72);display:none;
+    align-items:center;justify-content:center;z-index:3;cursor:pointer;color:#fff}
+  .gallery-grid.selecting .gcard .selbox{display:flex}
+  .gallery-grid.selecting .gcard .grow{display:none}
+  .gcard .selbox svg{display:none}
+  .gcard.selected .selbox{background:#e0556b;border-color:#e0556b}
+  .gcard.selected .selbox svg{display:block}
+  .gcard.selected{border-color:#e0556b}
+  .gallery-grid.selecting .gcard{cursor:pointer}
+  /* selection toolbar */
+  .sel-toolbar{display:none;align-items:center;gap:8px;flex-wrap:wrap;
+    padding:10px 18px;border-bottom:1px solid var(--line);background:#171226}
+  .sel-toolbar.show{display:flex}
+  .sel-toolbar .selcount{font-size:13px;color:var(--muted);margin-right:auto}
+  .sel-toolbar button{font-size:12px;padding:7px 12px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel);color:var(--ink);cursor:pointer}
+  .sel-toolbar button:hover{border-color:var(--flame)}
+  .sel-toolbar button.danger{border-color:#e0556b;color:#ff8a9c}
+  .sel-toolbar button.danger:disabled{opacity:.4;cursor:default;border-color:var(--line);color:var(--muted)}
+  .btn.danger{border-color:#e0556b;color:#ff8a9c}
+  /* Phone: two comparison pairs per row (smaller, but full cards visible). */
+  @media (max-width: 640px){
+    .gallery-grid{grid-template-columns:1fr 1fr;gap:10px;padding:12px}
+    .gcard .meta{padding:6px 7px}
+    .gcard .gname{font-size:11px}
+    .gcard .gsub{font-size:9.5px}
+    .gcard .grow button{font-size:9.5px;padding:4px 4px}
+    .modal-head{padding:12px 12px}
+    .modal-head.stacked .modal-head-actions{gap:6px}
+    .modal-head.stacked .modal-head-actions .btn{padding:8px 10px;font-size:13px}
+    .modal-head.stacked #galleryClose{padding:8px}
+  }
+  /* magnifier loupe for precise manual point placement on touch screens */
+  .loupe{position:absolute;width:130px;height:130px;border-radius:50%;
+    border:3px solid var(--ember);box-shadow:0 6px 22px rgba(0,0,0,.6);
+    pointer-events:none;display:none;z-index:40;background:var(--stage)}
+  .loupe.show{display:block}
+</style>
+</head>
+<body>
+<header>
+  <div class="eyebrow">Card Comparison</div>
+</header>
+
+<div class="stage" id="stage">
+  <div class="steps">
+    <button class="step active" id="s1"><span class="num">1</span><span>Upload your card</span></button>
+    <button class="step" id="s2"><span class="num">2</span><span>Upload reference</span></button>
+    <button class="step" id="s3"><span class="num">3</span><span>Compare</span></button>
+    <button class="step" id="s4"><span class="num"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line></svg></span><span>Manually align points</span></button>
+  </div>
+
+  <div id="viewport">
+  <button class="fsexit" id="fsExit" title="Exit fullscreen" aria-label="Exit fullscreen">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <polyline points="9 4 4 4 4 9"></polyline><polyline points="15 4 20 4 20 9"></polyline>
+      <polyline points="9 20 4 20 4 15"></polyline><polyline points="15 20 20 20 20 15"></polyline>
+    </svg>
+  </button>
+  <div class="modebar" id="modebar">
+    <button class="modebtn active" data-mode="wipe">Swipe</button>
+    <button class="modebtn" data-mode="onion">Overlay</button>
+    <button class="modebtn" data-mode="side">Side by side</button>
+  </div>
+
+  <div class="compare pre-upload" id="compare">
+    <div class="layer" id="bottomLayer">
+      <div class="empty" id="emptyState"><strong>No cards yet</strong><span>Upload your card and a reference to begin.</span></div>
+      <div class="onboard" id="onboard">
+        <div class="onboard-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="7" height="18" rx="1.5"></rect><rect x="14" y="3" width="7" height="18" rx="1.5"></rect>
+          </svg>
+        </div>
+        <h3>Compare two cards</h3>
+        <div class="onboard-steps">
+          <div class="onboard-card"><span class="oc-num">1</span><span class="oc-t">Upload your card</span><span class="oc-d">The card you want to check.</span></div>
+          <div class="onboard-card"><span class="oc-num">2</span><span class="oc-t">Add a reference card</span><span class="oc-d">A known, good example of the same card.</span></div>
+          <div class="onboard-card"><span class="oc-num">3</span><span class="oc-t">Compare</span><span class="oc-d">Images are auto-aligned, compare by using Swipe, Overlay, or Side by side.</span></div>
+          <div class="onboard-card"><span class="oc-num">4</span><span class="oc-t">Fine-tune</span><span class="oc-d">Manually align points for greater precision, or if the cards do not auto-align cleanly.</span></div>
+        </div>
+        <p class="onboard-hint">Tip: You can also Drag &amp; drop or Copy and paste an image here.</p>
+      </div>
+      <canvas id="refCanvas"></canvas>
+      <div class="skel hide" id="skelBottom"><div class="skel-card"><span class="skel-label"><span class="skel-spinner"></span>Reading reference…</span></div></div>
+    </div>
+    <div class="layer top" id="topLayer">
+      <canvas id="userCanvas" style="display:none"></canvas>
+      <div class="skel hide" id="skelTop"><div class="skel-card"><span class="skel-label"><span class="skel-spinner"></span>Reading your card…</span></div></div>
+    </div>
+    <div class="tag left">Yours</div>
+    <div class="tag right">Reference</div>
+    <div class="handle" id="handle"><div class="grip">&#8644;</div></div>
+
+    <div class="pickwrap" id="pickwrap">
+      <div class="pickhead">
+        <span class="pickmodelabel">Mark four points A, B, C, D at the same location on each card</span>
+      </div>
+      <div class="pickstage" id="pickStage">
+        <div class="pickpan" id="pickPan">
+          <canvas id="pickCanvas" class="pickcanvas"></canvas>
+        </div>
+        <div class="dotlayer" id="dotLayer"></div>
+        <canvas id="loupe" class="loupe" width="260" height="260"></canvas>
+      </div>
+      <div class="pickbar">
+        <span id="pickMsg">Tap point <b>A</b></span>
+        <span class="pickactions">
+          <button class="btn pickzoom" id="pickZoomBtn" aria-pressed="false" title="Zoom" style="display:none">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line>
+              <line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line>
+            </svg><span id="pickZoomLabel">Zoom</span>
+          </button>
+          <button class="btn" id="pickUndo">Undo point</button>
+          <button class="btn" id="pickConfirm" style="display:none;background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent);border:none">Confirm points</button>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <div class="sidebyside" id="sidebyside">
+    <div class="sbs-col">
+      <span class="sbs-tag left">Yours</span>
+      <span class="sbs-toggle" id="sbsToggle">
+        <button data-sbs="orig">Original</button>
+        <button data-sbs="aligned" class="active">Aligned</button>
+      </span>
+      <canvas id="sbsUser"></canvas>
+    </div>
+    <div class="sbs-col"><span class="sbs-tag right">Reference</span><canvas id="sbsRef"></canvas></div>
+  </div>
+
+  <div class="rotatehint" id="rotateHint">
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M4 9a9 9 0 0 1 14-3l2 2"></path><polyline points="20 4 20 8 16 8"></polyline>
+      <path d="M20 15a9 9 0 0 1-14 3l-2-2"></path><polyline points="4 20 4 16 8 16"></polyline>
+    </svg>
+    <span>Use Fullscreen mode + Rotate phone sideways for larger cards</span>
+  </div>
+
+  <div class="onion" id="onionBar">
+    <label for="onionRange">Opacity</label>
+    <input type="range" id="onionRange" min="0" max="100" value="50">
+    <span class="val" id="onionVal">50%</span>
+  </div>
+  </div>
+
+  <div class="controls">
+    <input type="file" id="refFile" accept="image/*" style="display:none">
+    <input type="file" id="userFile" accept="image/*" style="display:none">
+    <button class="btn" id="alignBtn" hidden disabled>Align points</button>
+    <button class="btn iconbtn" id="saveBtn" title="Save this comparison to your library" disabled>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+        <polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline>
+      </svg>
+      <span>Save</span>
+    </button>
+    <button class="btn iconbtn" id="shareBtn" title="Share this comparison as an image" disabled>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle>
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+      </svg>
+      <span>Share</span>
+    </button>
+    <button class="btn iconbtn" id="libraryBtn" title="Open your saved comparisons">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect>
+        <rect x="3" y="14" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect>
+      </svg>
+      <span>Library</span>
+    </button>
+    <button class="btn iconbtn" id="fsBtn" title="Fullscreen">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="4 9 4 4 9 4"></polyline><polyline points="20 9 20 4 15 4"></polyline>
+        <polyline points="4 15 4 20 9 20"></polyline><polyline points="20 15 20 20 15 20"></polyline>
+      </svg>
+      <span id="fsLabel">Fullscreen</span>
+    </button>
+    <button class="btn iconbtn" id="resetBtn" title="Clear cards and start over">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="1 4 1 10 7 10"></polyline>
+        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+      </svg>
+      <span>Start over</span>
+    </button>
+  </div>
+  <p class="hint" id="hint">Step 1: Upload your card</p>
+  <p class="hint" id="uploadStatus" style="font-size:11px;color:var(--muted);min-height:14px"></p>
+</div>
+
+<input type="file" id="importFile" accept="application/json,text/plain,text/csv,.json,.txt,.csv" multiple style="display:none">
+<div class="modal" id="nameModal" aria-hidden="true">
+  <div class="modal-card" style="width:min(420px,94vw)">
+    <div class="modal-head"><h2>Save comparison</h2></div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:14px">
+      <label for="nameInput" style="font-size:13px;color:var(--muted)">Name this comparison</label>
+      <input type="text" id="nameInput" autocomplete="off"
+        style="width:100%;box-sizing:border-box;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:#171226;color:var(--ink);font-size:15px">
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" id="nameCancel">Cancel</button>
+        <button class="btn" id="nameSave" style="background:linear-gradient(90deg,var(--flame),var(--ember));color:var(--onAccent);border:none">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal" id="shareModal" aria-hidden="true">
+  <div class="modal-card" style="width:min(420px,94vw)">
+    <div class="modal-head"><h2>Share as&hellip;</h2></div>
+    <div style="padding:18px 20px;display:flex;flex-direction:column;gap:10px">
+      <button class="btn" id="shareAsImage" style="justify-content:flex-start;text-align:left;padding:12px 14px">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;margin-right:9px">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline>
+        </svg>
+        <span><b>Image</b><br><span style="font-size:11.5px;color:var(--muted)">A picture of both cards, side by side</span></span>
+      </button>
+      <button class="btn" id="shareAsFile" style="justify-content:flex-start;text-align:left;padding:12px 14px">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none;margin-right:9px">
+          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline>
+        </svg>
+        <span><b>Comparison file</b><br><span style="font-size:11.5px;color:var(--muted)">Recipient can Import it into this tool</span></span>
+      </button>
+      <div style="display:flex;justify-content:flex-end;margin-top:2px">
+        <button class="btn" id="shareCancel">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="modal" id="galleryModal" aria-hidden="true">
+  <div class="modal-card">
+    <div class="modal-head stacked">
+      <h2>Saved comparisons</h2>
+      <div class="modal-head-actions">
+        <button class="btn" id="selectToggleBtn" title="Select comparisons to delete">Select</button>
+        <button class="btn" id="importBtn" title="Load one or more comparison files from your device">Import</button>
+        <button class="btn" id="exportAllBtn" title="Download all saved comparisons as one file">Export</button>
+        <button class="btn iconbtn" id="galleryClose" title="Close">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+    </div>
+    <div class="sel-toolbar" id="selToolbar">
+      <span class="selcount" id="selCount">0 selected</span>
+      <button id="selAllBtn" title="Select every comparison">Select all</button>
+      <button id="selNoneBtn" title="Clear selection">Clear</button>
+      <button class="danger" id="selDeleteBtn" title="Delete the selected comparisons" disabled>Delete selected</button>
+      <button id="selCancelBtn" title="Exit selection mode">Done</button>
+    </div>
+    <div id="galleryGrid" class="gallery-grid"></div>
+    <p id="galleryEmpty" class="gallery-empty">No saved comparisons yet. Load two cards, then tap <b>Save</b>.</p>
+  </div>
+</div>
+
+<script>
+// Surface any uncaught error or unhandled rejection visibly. On mobile a thrown
+// error in a draw/detect path can otherwise look like a silent freeze. This
+// turns it into a readable message we can act on.
+(function(){
+  function show(msg){
+    try{
+      let bar=document.getElementById('__errbar');
+      if(!bar){
+        bar=document.createElement('div');bar.id='__errbar';
+        bar.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:99999;'
+          +'background:#3a0d0d;color:#ffd9d9;font:12px/1.4 system-ui,sans-serif;'
+          +'padding:10px 12px;max-height:40vh;overflow:auto;border-top:2px solid #ff6b6b;'
+          +'white-space:pre-wrap;-webkit-user-select:text;user-select:text';
+        var b=document.createElement('button');b.textContent='Dismiss';
+        b.style.cssText='float:right;margin-left:8px;background:#ff6b6b;border:none;'
+          +'color:#1a0000;font-weight:700;padding:4px 10px;border-radius:6px';
+        b.onclick=function(){bar.remove();};
+        bar.appendChild(b);
+        document.body.appendChild(bar);
+      }
+      var line=document.createElement('div');line.textContent=msg;bar.appendChild(line);
+    }catch(e){/* last resort */ try{console.error(msg);}catch(_){} }
+  }
+  window.addEventListener('error',function(e){
+    var m=e.message||'';
+    // Benign, non-fatal browser warning; ignore so it doesn't spam the bar.
+    if(/ResizeObserver loop/i.test(m))return;
+    show('Error: '+m+(e.filename?(' @'+e.filename+':'+e.lineno):''));
+  });
+  window.addEventListener('unhandledrejection',function(e){
+    var r=e&&e.reason;show('Promise error: '+((r&&r.message)||r||'unknown'));
+  });
+})();
+const compare=document.getElementById('compare');
+const handle=document.getElementById('handle');
+const topLayer=document.getElementById('topLayer');
+const bottomLayer=document.getElementById('bottomLayer');
+const emptyState=document.getElementById('emptyState');
+const refCanvas=document.getElementById('refCanvas');
+const rctx=refCanvas.getContext('2d');
+const userCanvas=document.getElementById('userCanvas');
+const uctx=userCanvas.getContext('2d');
+const pickCanvas=document.getElementById('pickCanvas');
+const pctx=pickCanvas.getContext('2d');
+const pickwrap=document.getElementById('pickwrap');
+const pickMsg=document.getElementById('pickMsg');
+const alignBtn=document.getElementById('alignBtn');
+const hint=document.getElementById('hint');
+const pickStage=document.getElementById('pickStage');
+const pickPan=document.getElementById('pickPan');
+const dotLayer=document.getElementById('dotLayer');
+const pickZoomBtn=document.getElementById('pickZoomBtn');
+const pickZoomLabel=document.getElementById('pickZoomLabel');
+
+/* pick-canvas zoom/pan state (independent of compare-view zoom) */
+let pZoom=1,pPanX=0,pPanY=0,pZoomMode=false;
+
+let refImage=null, userImage=null;
+// Cached, downscaled copy of userImage used only for the perspective warp.
+// The warp draws ~1150 triangles, each an entire drawImage of the source; doing
+// that from a multi-thousand-pixel photo freezes the tab for tens of seconds.
+// Since warp output is only canvas-sized, a ~1400px proxy is visually identical
+// but ~10-20x cheaper. Invalidated whenever userImage changes.
+let userWarpSrc=null;
+let warpBuf=null; // reused offscreen canvas the perspective warp renders into
+let _imgUidSeq=0;
+// Give an image a stable unique id so warp caches can be keyed on identity rather
+// than on dimensions (different cards can share dimensions and collide).
+function imgUid(img){if(img&&!img._uid)img._uid=++_imgUidSeq;return img?img._uid:0;}
+function getUserWarpSrc(){
+  if(!userImage)return null;
+  const uid=imgUid(userImage);
+  if(userWarpSrc && userWarpSrc._forUid===uid){
+    return userWarpSrc;
+  }
+  const MAX=1400;
+  const iw=userImage.naturalWidth, ih=userImage.naturalHeight;
+  const s=Math.min(1, MAX/Math.max(iw,ih));
+  if(s>=1){ // already small enough — use the image directly
+    userWarpSrc=userImage;
+    userWarpSrc._forUid=uid;
+    userWarpSrc._scale=1;
+    return userWarpSrc;
+  }
+  const cv=document.createElement('canvas');
+  cv.width=Math.round(iw*s); cv.height=Math.round(ih*s);
+  const cx=cv.getContext('2d');
+  cx.imageSmoothingEnabled=true; cx.imageSmoothingQuality='high';
+  cx.drawImage(userImage,0,0,cv.width,cv.height);
+  cv._forUid=uid; cv._scale=s;
+  userWarpSrc=cv;
+  return userWarpSrc;
+}
+let refPts=[], userPts=[], phase=null, isAligned=false;
+let refAuto=null, userAuto=null; // auto-detected corners (or null if detection failed)
+let alignSnapshot=null; // alignment to restore if a manual pick is cancelled
+let pickN=4; // perspective warp (4pt) only
+const PT_LABELS=['A','B','C','D'];
+const PT_HINTS=['top-left corner','top-right corner','bottom-right corner','bottom-left corner'];
+
+/* divider */
+let pct=50;
+function setPct(p){pct=Math.max(0,Math.min(100,p));handle.style.left=pct+'%';
+  topLayer.style.clipPath='inset(0 '+(100-pct)+'% 0 0)';}
+setPct(50);
+function moveFromEvent(e){const r=compare.getBoundingClientRect();
+  const x=(e.touches?e.touches[0].clientX:e.clientX)-r.left;setPct(x/r.width*100);}
+
+/* zoom + pan (always enabled: scroll / pinch to zoom, drag to pan when zoomed) */
+let zoom=1, panX=0, panY=0;
+const userCanvasEl=document.getElementById('userCanvas');
+const refCanvasEl=document.getElementById('refCanvas');
+
+function applyZoomTransform(){
+  const t='translate('+panX+'px,'+panY+'px) scale('+zoom+')';
+  [userCanvasEl,refCanvasEl,sbsRef,sbsUser].forEach(c=>{
+    if(c){c.style.transformOrigin='center center';c.style.transform=t;}
+  });
+  compare.style.cursor = zoom>1 ? 'grab' : '';
+  const s=document.getElementById('sidebyside'); if(s) s.style.cursor = zoom>1 ? 'grab' : '';
+}
+function zoomContainer(){const s=document.getElementById('sidebyside');return (s&&s.classList.contains('show'))?s:compare;}
+function clampPan(){
+  const r=zoomContainer().getBoundingClientRect();
+  const maxX=(zoom-1)*r.width/2, maxY=(zoom-1)*r.height/2;
+  panX=Math.max(-maxX,Math.min(maxX,panX));
+  panY=Math.max(-maxY,Math.min(maxY,panY));
+}
+/* zoom toward a screen point (cx,cy) by multiplicative factor */
+function zoomAt(factor, cx, cy){
+  const r=zoomContainer().getBoundingClientRect();
+  // pointer position relative to canvas centre (origin of the transform)
+  const ox=cx-(r.left+r.width/2), oy=cy-(r.top+r.height/2);
+  const prev=zoom;
+  let next=Math.max(1,Math.min(6,zoom*factor));
+  if(next===prev)return;
+  // keep the point under the cursor fixed: adjust pan for the scale change
+  const ratio=next/prev;
+  panX=ox - (ox-panX)*ratio;
+  panY=oy - (oy-panY)*ratio;
+  zoom=next;
+  if(zoom===1){panX=0;panY=0;}
+  clampPan();applyZoomTransform();
+  if(zoom>1)markCompared();
+}
+function resetZoom(){zoom=1;panX=0;panY=0;applyZoomTransform();}
+
+/* mouse wheel zoom (laptop) — always on */
+compare.addEventListener('wheel',e=>{
+  if(phase)return;
+  e.preventDefault();
+  const factor=Math.exp(-e.deltaY*0.0015); // smooth, proportional to scroll amount
+  zoomAt(factor,e.clientX,e.clientY);
+},{passive:false});
+
+/* pinch zoom (phone) */
+let pinch=null;
+function dist(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);}
+function mid(t){return [(t[0].clientX+t[1].clientX)/2,(t[0].clientY+t[1].clientY)/2];}
+
+/* drag: divider when not zoomed (or grabbing handle); pan when zoomed */
+let dragging=false, panning=false, panStart=null;
+function pointerXY(e){return e.touches?[e.touches[0].clientX,e.touches[0].clientY]:[e.clientX,e.clientY];}
+function startDrag(e){
+  if(phase)return;
+  if(e.touches && e.touches.length===2){
+    pinch={d:dist(e.touches)}; e.preventDefault(); return;
+  }
+  const onHandle = e.target.closest && e.target.closest('#handle');
+  if(zoom>1 && !onHandle){
+    panning=true;const [x,y]=pointerXY(e);panStart={x,y,px:panX,py:panY};
+    compare.style.cursor='grabbing';markCompared();e.preventDefault();return;
+  }
+  if(typeof mode!=='undefined' && mode==='side') return; // no divider in side-by-side
+  dragging=true;handle.style.opacity='0';moveFromEvent(e);markCompared();e.preventDefault();
+}
+function onMove(e){
+  if(e.touches && e.touches.length===2 && pinch){
+    const nd=dist(e.touches), [mx,my]=mid(e.touches);
+    zoomAt(nd/pinch.d, mx, my); pinch.d=nd; e.preventDefault(); return;
+  }
+  if(dragging){moveFromEvent(e);}
+  else if(panning){const [x,y]=pointerXY(e);
+    panX=panStart.px+(x-panStart.x);panY=panStart.py+(y-panStart.y);
+    clampPan();applyZoomTransform();}
+}
+function endDrag(e){
+  if(dragging){dragging=false;handle.style.opacity='';}
+  if(panning){panning=false;compare.style.cursor=zoom>1?'grab':'';}
+  if(!e.touches || e.touches.length<2) pinch=null;
+}
+compare.addEventListener('mousedown',startDrag);
+window.addEventListener('mousemove',onMove);
+window.addEventListener('mouseup',endDrag);
+compare.addEventListener('touchstart',startDrag,{passive:false});
+window.addEventListener('touchmove',e=>{if(dragging||panning||pinch){onMove(e);e.preventDefault();}},{passive:false});
+window.addEventListener('touchend',endDrag);
+/* enable the same zoom/pan in side-by-side mode */
+const sideZoomEl=document.getElementById('sidebyside');
+sideZoomEl.addEventListener('wheel',e=>{
+  if(phase)return;
+  e.preventDefault();
+  const factor=Math.exp(-e.deltaY*0.0015);
+  zoomAt(factor,e.clientX,e.clientY);
+},{passive:false});
+sideZoomEl.addEventListener('mousedown',startDrag);
+sideZoomEl.addEventListener('touchstart',startDrag,{passive:false});
+
+let sbsUserMode='aligned'; // 'orig' = raw upload, 'aligned' = warped to reference
+const sbsToggle=document.getElementById('sbsToggle');
+sbsToggle.querySelectorAll('button').forEach(b=>{
+  b.onclick=()=>{
+    sbsUserMode=b.dataset.sbs;
+    sbsToggle.querySelectorAll('button').forEach(x=>x.classList.toggle('active',x===b));
+    if(mode==='side'){drawSideBySide();markCompared();}
+  };
+});
+
+const onionRange=document.getElementById('onionRange');
+const onionVal=document.getElementById('onionVal');
+onionRange.addEventListener('input',()=>{
+  const v=+onionRange.value;
+  onionVal.textContent=v+'%';
+  if(mode==='onion'){bottomLayer.style.opacity=v/100;markCompared();}
+});
+/* in fullscreen overlay mode, hide the floating slider while actively dragging it */
+const onionBarEl=document.getElementById('onionBar');
+function onionDragStart(){onionBarEl.classList.add('dragging');}
+function onionDragEnd(){onionBarEl.classList.remove('dragging');}
+onionRange.addEventListener('pointerdown',onionDragStart);
+onionRange.addEventListener('touchstart',onionDragStart,{passive:true});
+window.addEventListener('pointerup',onionDragEnd);
+window.addEventListener('touchend',onionDragEnd);
+onionRange.addEventListener('keydown',onionDragStart);
+onionRange.addEventListener('keyup',onionDragEnd);
+
+/* fullscreen */
+const fsBtn=document.getElementById('fsBtn'), fsLabel=document.getElementById('fsLabel');
+const viewport=document.getElementById('viewport');
+function inFullscreen(){return document.fullscreenElement||document.webkitFullscreenElement;}
+fsBtn.onclick=()=>{
+  if(!inFullscreen()){
+    (viewport.requestFullscreen||viewport.webkitRequestFullscreen||(()=>{})).call(viewport);
+  }else{
+    (document.exitFullscreen||document.webkitExitFullscreen||(()=>{})).call(document);
+  }
+};
+function redrawForView(){if(mode==='side')drawSideBySide();else redrawBoth();applyZoomTransform();}
+// Tapping the portrait "rotate" hint enters fullscreen and tries to lock the
+// screen to landscape. Orientation lock only works while fullscreen and only on
+// browsers that support it (Android Chrome does; iOS Safari does not) — so this
+// is a best-effort enhancement, and the hint text already tells the user they
+// can simply rotate their device manually.
+const rotateHint=document.getElementById('rotateHint');
+if(rotateHint){
+  rotateHint.style.cursor='pointer';
+  rotateHint.onclick=()=>{
+    const lockLandscape=()=>{
+      try{
+        if(screen.orientation&&screen.orientation.lock){
+          screen.orientation.lock('landscape').catch(()=>{});
+        }
+      }catch(e){}
+    };
+    if(!inFullscreen()){
+      const req=viewport.requestFullscreen||viewport.webkitRequestFullscreen;
+      if(req){
+        const p=req.call(viewport);
+        if(p&&p.then)p.then(lockLandscape).catch(lockLandscape);
+        else setTimeout(lockLandscape,150);
+      }else{lockLandscape();}
+    }else{lockLandscape();}
+  };
+}
+function syncFsLabel(){
+  const on=!!inFullscreen();
+  fsLabel.textContent=on?'Exit':'Fullscreen';
+  // Redraw once the fullscreen layout settles (scheduleRedraw retries until the
+  // stage reports a stable size, so it handles the enter/exit transition).
+  scheduleRedraw();
+}
+document.addEventListener('fullscreenchange',syncFsLabel);
+document.addEventListener('webkitfullscreenchange',syncFsLabel);
+document.getElementById('fsExit').onclick=()=>{
+  (document.exitFullscreen||document.webkitExitFullscreen||(()=>{})).call(document);
+};
+
+/* view modes: wipe | fade | side */
+let mode='wipe';
+const compareEl=document.getElementById('compare');
+const stage=document.getElementById('stage');
+// Keep the 2x2 step grid the same width as the comparison box (whose width is
+// derived from its 5:7 aspect ratio and available height, so it's narrower than
+// the stage). We mirror that rendered width onto the .steps grid via a CSS var.
+const stepsEl=document.querySelector('.steps');
+function syncStepsWidth(){
+  if(!stepsEl||!compareEl)return;
+  // Measure the comparison box; in side-by-side mode it's hidden, so fall back
+  // to the side container's width instead.
+  let w=compareEl.getBoundingClientRect().width;
+  if(!w){const s=document.getElementById('sidebyside');if(s)w=s.getBoundingClientRect().width;}
+  if(w)stepsEl.style.setProperty('--cmpw',w+'px');
+}
+if('ResizeObserver' in window){
+  try{new ResizeObserver(syncStepsWidth).observe(compareEl);}catch(e){}
+}
+window.addEventListener('resize',syncStepsWidth);
+window.addEventListener('orientationchange',()=>{
+  // After rotating, wait for the new layout to settle, then redraw the active view.
+  setTimeout(()=>{
+    if(mode==='side')drawSideBySide();
+    else if(refImage||userImage)redrawBoth();
+  },250);
+});
+requestAnimationFrame(syncStepsWidth);
+const sideEl=document.getElementById('sidebyside');
+const modebar=document.getElementById('modebar');
+const sbsRef=document.getElementById('sbsRef'), sbsUser=document.getElementById('sbsUser');
+const sbsRctx=sbsRef.getContext('2d'), sbsUctx=sbsUser.getContext('2d');
+modebar.querySelectorAll('.modebtn').forEach(b=>{
+  b.onclick=()=>{
+    if(phase)return;
+    if(mode===b.dataset.mode)return; // no-op if already active
+    mode=b.dataset.mode;
+    modebar.querySelectorAll('.modebtn').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active');
+    // Brief crossfade: fade the stage out, swap modes, fade back in.
+    const reduce=window.matchMedia&&window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+    if(reduce){
+      applyMode();
+      if(mode==='side'||mode==='onion')markCompared();
+      return;
+    }
+    compareEl.classList.add('switching');
+    stage.classList.add('mode-fade');
+    setTimeout(()=>{
+      applyMode();
+      if(mode==='side'||mode==='onion')markCompared();
+      // next frame, fade the new view in
+      requestAnimationFrame(()=>{
+        compareEl.classList.remove('switching');
+        stage.classList.remove('mode-fade');
+      });
+    },150);
+  };
+});
+function applyMode(){
+  const onionBar=document.getElementById('onionBar');
+  stage.classList.toggle('side-active',mode==='side');
+  if(mode==='side'){
+    compareEl.style.display='none';sideEl.classList.add('show');
+    onionBar.classList.remove('show');
+    scheduleRedraw();
+  }else if(mode==='onion'){
+    sideEl.classList.remove('show');compareEl.style.display='';
+    handle.style.display='none';
+    topLayer.style.clipPath='none';topLayer.style.opacity='1';
+    // Reference (bottomLayer) is raised above your card and its opacity is the
+    // slider: 100% = reference fully shown, lowering it reveals your card beneath.
+    bottomLayer.style.zIndex='4';
+    bottomLayer.style.opacity=(+document.getElementById('onionRange').value)/100;
+    onionBar.classList.add('show');
+    scheduleRedraw();
+  }else{
+    sideEl.classList.remove('show');compareEl.style.display='';
+    handle.style.display='';topLayer.style.opacity='1';
+    bottomLayer.style.zIndex='';bottomLayer.style.opacity='1';
+    topLayer.style.clipPath='inset(0 '+(100-pct)+'% 0 0)';
+    userCanvas.style.opacity='1';
+    onionBar.classList.remove('show');
+    scheduleRedraw();
+  }
+}
+function sizeC(c){const r=(sideEl.classList.contains('show')?c.parentElement:compare).getBoundingClientRect();
+  c.width=r.width;c.height=r.height;}
+function drawSideBySide(){
+  // If the panels aren't laid out yet (0 size), just skip — scheduleRedraw will
+  // call us again at fixed delays. No internal retry loop here (that could feed
+  // a ResizeObserver loop).
+  const pr=sbsRef.parentElement, pu=sbsUser.parentElement;
+  const ready=(pr&&pr.clientWidth>2&&pr.clientHeight>2)&&(pu&&pu.clientWidth>2&&pu.clientHeight>2);
+  if(!ready)return;
+  if(refImage){
+    const [bw,bh]=bufferDims(sbsRef.parentElement.clientWidth,sbsRef.parentElement.clientHeight);
+    sbsRef.width=bw;sbsRef.height=bh;
+    sbsRctx.imageSmoothingEnabled=true;sbsRctx.imageSmoothingQuality='high';
+    sbsRctx.clearRect(0,0,bw,bh);
+    const s=Math.min(bw/refImage.naturalWidth,bh/refImage.naturalHeight);
+    const w=refImage.naturalWidth*s,h=refImage.naturalHeight*s;
+    sbsRctx.drawImage(refImage,(bw-w)/2,(bh-h)/2,w,h);}
+  if(userImage){
+    const [bw,bh]=bufferDims(sbsUser.parentElement.clientWidth,sbsUser.parentElement.clientHeight);
+    sbsUser.width=bw;sbsUser.height=bh;
+    sbsUctx.imageSmoothingEnabled=true;sbsUctx.imageSmoothingQuality='high';
+    sbsUctx.clearRect(0,0,bw,bh);
+    if(sbsUserMode==='aligned' && isAligned && alignMode===4 && refPts.length>=4 && userPts.length>=4){
+      // warp the user card to the reference geometry (same as swipe/overlay)
+      drawUserPerspective(sbsUser,sbsUctx);
+    }else{
+      const s=Math.min(bw/userImage.naturalWidth,bh/userImage.naturalHeight);
+      const w=userImage.naturalWidth*s,h=userImage.naturalHeight*s;
+      sbsUctx.drawImage(userImage,(bw-w)/2,(bh-h)/2,w,h);
+    }}
+}
+
+let compared=false, manuallyAligned=false;
+function setStep(active){['s1','s2','s3','s4'].forEach((id,i)=>{
+  const el=document.getElementById(id);el.classList.remove('active','done');
+  if(i<active)el.classList.add('done');if(i===active)el.classList.add('active');});
+  if(compared){const s3=document.getElementById('s3');s3.classList.remove('active');s3.classList.add('done');}
+  if(manuallyAligned){const s4=document.getElementById('s4');s4.classList.add('done');}
+  refreshStep4Glow();}
+// Once both cards are loaded (so comparing and aligning are possible) and the
+// user hasn't manually aligned yet, glow step 4 to show it's an available next
+// action — alongside step 3, which also stays lit as the primary suggestion.
+function refreshStep4Glow(){
+  const s4=document.getElementById('s4');if(!s4)return;
+  const ready=refImage&&userImage&&!manuallyAligned&&!phase;
+  s4.classList.toggle('active',!!ready);
+  if(manuallyAligned){s4.classList.remove('active');s4.classList.add('done');}
+}
+setStep(0);
+
+function markCompared(){
+  if(!(refImage&&userImage))return;
+  compared=true;
+  const s3=document.getElementById('s3');
+  s3.classList.remove('active');s3.classList.add('done');
+  refreshStep4Glow();
+}
+
+/* steps are clickable and drive the flow */
+function refreshStepAvailability(){
+  document.getElementById('s3').disabled=!(refImage&&userImage);
+  document.getElementById('s4').disabled=!(refImage&&userImage);
+}
+const refFileEl=document.getElementById('refFile');
+const userFileEl=document.getElementById('userFile');
+// reset value before opening so re-selecting the same (or a new) file always fires change
+document.getElementById('s1').onclick=(e)=>{userFileEl.value='';userFileEl.click();if(e&&e.currentTarget)e.currentTarget.blur();};
+document.getElementById('s2').onclick=(e)=>{refFileEl.value='';refFileEl.click();if(e&&e.currentTarget)e.currentTarget.blur();};
+document.getElementById('s3').onclick=()=>{ // Compare
+  if(!(refImage&&userImage))return;
+  if(phase)cancelPick(); // leaving a half-finished manual pick: keep previous alignment
+  resetZoom();
+  mode='wipe';
+  modebar.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('active',x.dataset.mode==='wipe'));
+  applyMode();markCompared();setStep(2);
+};
+document.getElementById('s4').onclick=()=>{ // Manual align
+  if(!(refImage&&userImage))return;
+  resetZoom();
+  // remember the current (e.g. auto) alignment so Compare can fall back to it
+  alignSnapshot={ref:refPts.slice(),user:userPts.slice(),isAligned,alignMode};
+  // leaving side-by-side: restore the main compare stage so the pick UI is visible
+  mode='wipe';
+  modebar.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('active',x.dataset.mode==='wipe'));
+  sideEl.classList.remove('show');compareEl.style.display='';
+  startPick('ref');
+};
+refreshStepAvailability();
+
+/* Render canvases at a higher internal resolution than their CSS box so that
+   zooming (a CSS transform) reveals real detail instead of upscaling a low-res
+   bitmap. The buffer is capped so memory stays reasonable. */
+const RENDER_SS=3; // supersample factor
+const RENDER_MAXSIDE=3000; // hard cap on longest canvas side (px)
+function bufferDims(cssW,cssH){
+  // Clamp the effective device pixel ratio. Many Android phones report DPR of
+  // 2.5–4; multiplied by the 3x supersample that asks for an enormous buffer,
+  // and the per-frame warp/blit on a mobile GPU can hang the tab. Cap the
+  // combined oversampling so buffers stay a sane size on mobile.
+  const rawDpr=window.devicePixelRatio||1;
+  const dpr=Math.min(rawDpr,2);
+  const ss=rawDpr>2?2:RENDER_SS; // lighter supersample on dense displays
+  let bw=Math.round(cssW*dpr*ss), bh=Math.round(cssH*dpr*ss);
+  const longest=Math.max(bw,bh);
+  if(longest>RENDER_MAXSIDE){const k=RENDER_MAXSIDE/longest;bw=Math.round(bw*k);bh=Math.round(bh*k);}
+  return [Math.max(1,bw),Math.max(1,bh)];
+}
+function stageVisible(){
+  if(mode==='side')return false;
+  const r=compare.getBoundingClientRect();
+  return r.width>=2&&r.height>=2;
+}
+function sizeCanvas(c){
+  // In side-by-side mode the main #compare stage is display:none (0x0).
+  if(mode==='side'){c.width=Math.max(2,c.width);c.height=Math.max(2,c.height);return;}
+  const r=compare.getBoundingClientRect();
+  // If the stage has no size yet, leave the canvas as-is — scheduleRedraw will
+  // call again once layout settles. No rAF retry here (avoids feedback loops).
+  if(r.width<2||r.height<2){c.width=Math.max(2,c.width);c.height=Math.max(2,c.height);return;}
+  const [bw,bh]=bufferDims(r.width,r.height);c.width=bw;c.height=bh;}
+
+/* draw an image "contain" into a canvas */
+function drawContain(c,cx,img){
+  sizeCanvas(c);cx.clearRect(0,0,c.width,c.height);
+  cx.imageSmoothingEnabled=true;cx.imageSmoothingQuality='high';
+  const s=Math.min(c.width/img.naturalWidth,c.height/img.naturalHeight);
+  const w=img.naturalWidth*s,h=img.naturalHeight*s;
+  cx.drawImage(img,(c.width-w)/2,(c.height-h)/2,w,h);
+}
+function drawRef(){if(!stageVisible())return;if(refImage)drawContain(refCanvas,rctx,refImage);}
+function drawUserPlain(){if(!stageVisible())return;if(userImage){userCanvas.style.display='block';drawContain(userCanvas,uctx,userImage);}}
+function drawUserTransformed(){
+  if(!stageVisible())return; // main stage hidden; drawSideBySide handles it
+  sizeCanvas(userCanvas);
+  uctx.clearRect(0,0,userCanvas.width,userCanvas.height);
+  userCanvas.style.display='block';
+  if(alignMode===4){
+    uctx.imageSmoothingEnabled=true;uctx.imageSmoothingQuality='high';
+    drawUserPerspective(userCanvas,uctx);
+  }else{
+    const t=computeTransform(userCanvas.width,userCanvas.height);
+    uctx.save();uctx.translate(t.tx,t.ty);uctx.rotate(t.rot);uctx.scale(t.scale,t.scale);
+    uctx.drawImage(userImage,0,0);uctx.restore();
+  }
+}
+function redrawBoth(){drawRef();if(isAligned)drawUserTransformed();else drawUserPlain();}
+// Draw the active view once, only if its container currently has a real size.
+// Returns true if it drew. No loops here — looping while resizing canvases is
+// what produced the "ResizeObserver loop" errors and left canvases blank.
+function drawActiveOnce(){
+  if(mode==='side'){
+    const p=sbsRef.parentElement&&sbsRef.parentElement.getBoundingClientRect();
+    if(p&&p.width>=2&&p.height>=2){drawSideBySide();return true;}
+    return false;
+  }
+  const r=compareEl.getBoundingClientRect();
+  if(r.width>=2&&r.height>=2){redrawBoth();if(typeof applyZoomTransform==='function')applyZoomTransform();return true;}
+  return false;
+}
+// Draw now, then again at a few fixed delays to catch late layout settling
+// (mobile flex resolution, fullscreen enter/exit, address-bar collapse). Using
+// discrete timeouts instead of a continuous rAF loop avoids feeding back into
+// any ResizeObserver and keeps the main thread free between attempts.
+let _drawTimers=[];
+function scheduleRedraw(){
+  _drawTimers.forEach(clearTimeout);_drawTimers=[];
+  drawActiveOnce();
+  [60,180,400,800].forEach(ms=>{
+    _drawTimers.push(setTimeout(drawActiveOnce,ms));
+  });
+}
+window.addEventListener('resize',()=>{if(mode==='side')drawSideBySide();else redrawBoth();applyZoomTransform();
+  if(phase&&pickwrap.classList.contains('show')){
+    const img=phase==='ref'?refImage:userImage;resetPickZoom();drawPick(img);
+    renderDots(phase==='ref'?refPts:userPts);
+  }});
+
+// Lazy-load the HEIC converter only when needed (keeps the app light + offline
+// for the normal JPG/PNG case). Returns a promise resolving to heic2any or null.
+let _heicLib=null,_heicTried=false;
+function loadHeicLib(){
+  if(_heicLib)return Promise.resolve(_heicLib);
+  if(_heicTried&&!_heicLib)return Promise.resolve(null);
+  _heicTried=true;
+  return new Promise(res=>{
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/heic2any/dist/heic2any.min.js';
+    s.onload=()=>{_heicLib=window.heic2any||null;res(_heicLib);};
+    s.onerror=()=>res(null);
+    document.head.appendChild(s);
+  });
+}
+function looksHeic(file){
+  const nm=file&&file.name?file.name:'',ty=file&&file.type?file.type:'';
+  return /\.(heic|heif)$/i.test(nm)||/hei[cf]/i.test(ty);
+}
+
+const _status=document.getElementById('uploadStatus');
+let _statusClearT=null;
+function setStatus(msg){
+  if(!_status)return;
+  _status.textContent=msg;
+  clearTimeout(_statusClearT);
+  // A successful load ends with a check mark; fade that confirmation out after
+  // 20s so it doesn't linger. Progress/error messages stay until replaced.
+  if(/\u2713\s*$/.test(msg)){
+    _statusClearT=setTimeout(()=>{
+      if(/\u2713\s*$/.test(_status.textContent))_status.textContent='';
+    },20000);
+  }
+}
+
+const WORK_MAXSIDE=2000; // working size; far below a 12MP phone photo
+
+// Read the EXIF Orientation tag (1..8) from JPEG bytes. Returns 1 (normal) when
+// absent or not a JPEG. Phone cameras very often store the photo as landscape
+// pixels plus an orientation flag; browsers don't always honour it on canvas, so
+// we read it ourselves and bake the correct rotation in below.
+function exifOrientation(buf){
+  try{
+    const v=new DataView(buf);
+    if(v.getUint16(0)!==0xFFD8) return 1;            // not JPEG
+    const len=v.byteLength; let off=2;
+    while(off<len){
+      const marker=v.getUint16(off); off+=2;
+      if(marker===0xFFE1){                            // APP1 (EXIF)
+        const exifLen=v.getUint16(off); const start=off+2;
+        if(v.getUint32(start)!==0x45786966) return 1; // "Exif"
+        const tiff=start+6;
+        const little=v.getUint16(tiff)===0x4949;
+        const get16=(o)=>v.getUint16(o,little);
+        const get32=(o)=>v.getUint32(o,little);
+        const ifd0=tiff+get32(tiff+4);
+        const n=get16(ifd0);
+        for(let i=0;i<n;i++){
+          const e=ifd0+2+i*12;
+          if(get16(e)===0x0112){ const val=get16(e+8); return (val>=1&&val<=8)?val:1; }
+        }
+        return 1;
+      }else if((marker&0xFF00)!==0xFF00){ break; }
+      else { off+=v.getUint16(off); }
+    }
+  }catch(e){}
+  return 1;
+}
+// Given a decoded image/bitmap and an orientation, return an upright source.
+// Orientations 1 (and unknown) pass through untouched to avoid needless work.
+function applyOrientation(obj,w,h,ori){
+  if(!ori||ori===1) return {obj,w,h};
+  const swap=ori>=5&&ori<=8;
+  const cw=swap?h:w, ch=swap?w:h;
+  const c=document.createElement('canvas');c.width=cw;c.height=ch;
+  const cx=c.getContext('2d');
+  switch(ori){
+    case 2: cx.transform(-1,0,0,1,w,0);break;            // mirror X
+    case 3: cx.transform(-1,0,0,-1,w,h);break;           // 180
+    case 4: cx.transform(1,0,0,-1,0,h);break;            // mirror Y
+    case 5: cx.transform(0,1,1,0,0,0);break;             // transpose
+    case 6: cx.transform(0,1,-1,0,h,0);break;            // 90 CW
+    case 7: cx.transform(0,-1,-1,0,h,w);break;           // mirror + 90 CW
+    case 8: cx.transform(0,-1,1,0,0,w);break;            // 90 CCW
+  }
+  try{ cx.drawImage(obj,0,0); }catch(e){ return {obj,w,h}; }
+  c.naturalWidth=cw;c.naturalHeight=ch;
+  return {obj:c,w:cw,h:ch};
+}
+
+// Loader strategy: FIRST read the file's raw bytes (readAsArrayBuffer). On
+// Android, the File handed over by the picker can be a cloud/content-URI
+// reference whose bytes never actually arrive — which makes BOTH the bitmap and
+// <img> decoders fail on a perfectly valid JPEG. Reading bytes ourselves and
+// rebuilding a fresh in-memory Blob fixes that, and lets us report exactly what
+// went wrong (byte count, magic header) if it still fails.
+function loadFile(file,cb,onFail){
+  const nm=file&&file.name?file.name:'(no name)', ty=file&&file.type?file.type:'(blank)';
+  const mb=file&&file.size?(file.size/1048576).toFixed(2):'?';
+  setStatus('Reading '+nm+' ('+ty+', '+mb+' MB)…');
+  let pendingOri=1; // EXIF orientation captured from the raw bytes, applied on decode
+
+  const succeed=(obj,w,h,via)=>{
+    if(!w||!h){ failHard('decoder returned 0\u00d70 ('+via+')'); return; }
+    // Bake EXIF rotation into an upright source so detection + drawing are correct.
+    // The <img> fallback already auto-orients per CSS image-orientation, so only
+    // rotate manually for the bitmap path (which we forced to 'none' above).
+    if(via==='bitmap'){
+      const up=applyOrientation(obj,w,h,pendingOri);
+      obj=up.obj; w=up.w; h=up.h;
+    }
+    if(obj.naturalWidth===undefined){try{obj.naturalWidth=w;obj.naturalHeight=h;}catch(e){}}
+    setStatus('Loaded '+nm+' \u2713');
+    try{ cb(obj); }catch(err){ setStatus('Post-load error: '+(err&&err.message||err)); console.error(err); }
+  };
+  const failHard=(why)=>{
+    setStatus('Could not open '+nm+' — '+why);
+    try{ if(typeof onFail==='function') onFail(why); }catch(e){}
+    alert('This image couldn\'t be opened on this device.\n\nFile: '+nm+'\nType: '+ty+'\nSize: '+mb+' MB\nReason: '+why+'\n\nPlease tell the developer this exact reason text.');
+  };
+
+  const tryImg=(blob,whyBitmap)=>{
+    let url; try{ url=URL.createObjectURL(blob); }catch(e){ failHard('createObjectURL: '+e.message); return; }
+    const im=new Image();
+    im.onload=()=>{ succeed(im, im.naturalWidth, im.naturalHeight, 'img'); setTimeout(()=>{try{URL.revokeObjectURL(url);}catch(e){}},15000); };
+    im.onerror=()=>{ try{URL.revokeObjectURL(url);}catch(e){} failHard('img failed too (bitmap: '+whyBitmap+')'); };
+    im.src=url;
+  };
+
+  const decodeBlob=(blob)=>{
+    if('createImageBitmap' in window){
+      // Ask for no auto-orientation so our explicit EXIF handling is the only
+      // rotation applied (some engines otherwise rotate, causing double-rotation).
+      const opts={imageOrientation:'none'};
+      let p; try{ p=createImageBitmap(blob,opts); }catch(e){ p=createImageBitmap(blob); }
+      p.then(bmp=>{ succeed(bmp, bmp.width, bmp.height, 'bitmap'); })
+        .catch(err=>{ const why=(err&&err.name||'?'); setStatus('Bitmap failed ('+why+'), trying <img>…'); tryImg(blob,why); });
+    }else{
+      tryImg(blob,'no createImageBitmap');
+    }
+  };
+
+  // Step 1: read raw bytes ourselves, trying several methods + a retry, because
+  // a cloud-backed file can throw NotReadableError once but succeed after the OS
+  // starts fetching it.
+  const onBytes=(buf)=>{
+    const n=buf&&buf.byteLength||0;
+    if(!n){ failHard('read 0 bytes (file may be a cloud/Drive item not on the device)'); return; }
+    const head=new Uint8Array(buf,0,Math.min(4,n));
+    const isJPEG=head[0]===0xFF&&head[1]===0xD8;
+    const isPNG=head[0]===0x89&&head[1]===0x50;
+    if(isJPEG){ try{ pendingOri=exifOrientation(buf); }catch(e){ pendingOri=1; } }
+    setStatus('Read '+n+' bytes; header '+[...head].map(b=>b.toString(16).padStart(2,'0')).join(' ')+(isJPEG?' (JPEG)':isPNG?' (PNG)':'')+' — decoding…');
+    const fresh=new Blob([buf],{type:(ty&&ty!=='(blank)')?ty:(isJPEG?'image/jpeg':isPNG?'image/png':'application/octet-stream')});
+    decodeBlob(fresh);
+  };
+  // method via FileReader -> Promise
+  const readViaFR=(f)=>new Promise((res,rej)=>{
+    let fr; try{fr=new FileReader();}catch(e){rej(e);return;}
+    fr.onload=()=>res(fr.result);
+    fr.onerror=()=>rej(fr.error||new Error('FileReader error'));
+    fr.onabort=()=>rej(new Error('aborted'));
+    try{fr.readAsArrayBuffer(f);}catch(e){rej(e);}
+  });
+  // method via Blob.arrayBuffer() (different code path on Android)
+  const readViaAB=(f)=>(f.arrayBuffer?f.arrayBuffer():Promise.reject(new Error('no arrayBuffer')));
+
+  const readBytesThenDecode=(srcFile)=>{
+    let lastErr='';
+    const attempt=(methods,tries)=>{
+      if(!methods.length){
+        if(tries>0){ setStatus('Read failed, retrying… ('+lastErr+')');
+          setTimeout(()=>attempt([readViaFR,readViaAB],tries-1),350); return; }
+        failHard('FileReader error: '+lastErr+' (this file isn\'t readable — if it\'s in Google Photos/Drive, download it to the phone, or pick it from the Files app)');
+        return;
+      }
+      const m=methods[0];
+      Promise.resolve().then(()=>m(srcFile))
+        .then(buf=>onBytes(buf))
+        .catch(err=>{ lastErr=(err&&err.name)||(err&&err.message)||'unknown'; attempt(methods.slice(1),tries); });
+    };
+    attempt([readViaFR,readViaAB], 2);
+  };
+
+  if(looksHeic(file)){
+    setStatus('Converting HEIC '+nm+'…');
+    loadHeicLib().then(lib=>{
+      if(!lib){ readBytesThenDecode(file); return; }
+      lib({blob:file,toType:'image/jpeg',quality:0.85})
+        .then(out=>{ const blob=Array.isArray(out)?out[0]:out; decodeBlob(blob); })
+        .catch(err=>{ setStatus('HEIC convert failed: '+(err&&err.message||err)); readBytesThenDecode(file); });
+    });
+    return;
+  }
+  readBytesThenDecode(file);
+}
+
+
+
+
+
+
+
+
+
+const MAX_FILE_BYTES=25*1024*1024; // 25 MB cap
+function checkFile(f){
+  if(!f) return false;
+  // Android file pickers and cameras sometimes report an empty or generic MIME
+  // type for a perfectly valid image, so accept by type OR by file extension.
+  const typeOK=/^image\//.test(f.type||'');
+  const extOK=/\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(f.name||'');
+  if(!typeOK && !extOK){alert('Please choose an image file (JPG, PNG, etc.).');return false;}
+  if(f.size>MAX_FILE_BYTES){
+    alert('That image is '+(f.size/1048576).toFixed(1)+' MB, which is over the 25 MB limit. '
+      +'Please use a smaller image (most phone photos are well under this).');
+    return false;
+  }
+  return true;
+}
+
+// Skeleton helpers: show a shimmer over the relevant layer while an image
+// decodes and corner/landmark detection runs, so loading feels responsive
+// rather than frozen-then-instant.
+const skelTop=document.getElementById('skelTop');
+const skelBottom=document.getElementById('skelBottom');
+function showSkel(which){(which==='user'?skelTop:skelBottom).classList.remove('hide');}
+function hideSkel(which){(which==='user'?skelTop:skelBottom).classList.add('hide');}
+function hideOnboard(){
+  const o=document.getElementById('onboard');if(o)o.classList.add('hide');
+  compareEl.classList.remove('pre-upload'); // reveal divider/tags once a card exists
+}
+// Brief green ring pulse on the stage to signal a successful auto-align. Retriggerable.
+let _flashT=null;
+function flashAligned(){
+  if(mode==='side')return; // the split view isn't the compare stage
+  compareEl.classList.remove('aligned-flash');
+  // force reflow so re-adding the class restarts the animation
+  void compareEl.offsetWidth;
+  compareEl.classList.add('aligned-flash');
+  clearTimeout(_flashT);
+  _flashT=setTimeout(()=>compareEl.classList.remove('aligned-flash'),1000);
+}
+
+// Shared ingestion for a chosen file, whether it came from the picker, a drop,
+// or a paste. `which` is 'user' or 'ref'.
+function ingestImage(file,which){
+  if(!checkFile(file))return;
+  hideOnboard();
+  showSkel(which);
+  loadFile(file,img=>{
+    // Defer the heavy detection one frame so the skeleton paints first.
+    requestAnimationFrame(()=>setTimeout(()=>{
+      if(which==='ref'){
+        refImage=img;refPts=[];isAligned=false;compared=false;manuallyAligned=false;
+        try{refAuto=detectCorners(img);}catch(err){refAuto=null;console.error('detect failed',err);}
+        if(refAuto)refPts=refAuto.slice();
+        emptyState.style.display='none';drawRef();
+        ['s3','s4'].forEach(id=>document.getElementById(id).classList.remove('done','active'));
+        const s2=document.getElementById('s2');s2.classList.remove('active');s2.classList.add('done');
+        if(!userImage){const s1=document.getElementById('s1');s1.classList.add('active');
+          hint.innerHTML='Step 1: Upload your card';}
+      }else{
+        userImage=img;userPts=[];isAligned=false;compared=false;manuallyAligned=false;userWarpSrc=null;
+        try{userAuto=detectCorners(img);}catch(err){userAuto=null;console.error('detect failed',err);}
+        if(userAuto)userPts=userAuto.slice();
+        emptyState.style.display='none';drawUserPlain();
+        ['s3','s4'].forEach(id=>document.getElementById(id).classList.remove('done','active'));
+        const s1=document.getElementById('s1');s1.classList.remove('active');s1.classList.add('done');
+        if(!refImage){const s2=document.getElementById('s2');s2.classList.add('active');
+          hint.innerHTML='Step 2: Upload reference card';}
+      }
+      hideSkel(which);
+      maybeReady();
+    },0));
+  },()=>hideSkel(which)); // hide skeleton on load failure too
+}
+
+document.getElementById('refFile').addEventListener('change',e=>{
+  const f=e.target.files[0];ingestImage(f,'ref');e.target.value='';
+  if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+});
+document.getElementById('userFile').addEventListener('change',e=>{
+  const f=e.target.files[0];ingestImage(f,'user');e.target.value='';
+  if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+});
+
+// Decide which slot an ad-hoc image (drop/paste) should fill: fill yours first,
+// then the reference, and once both exist replace yours (the common re-shoot case).
+function slotForAdHoc(){
+  if(!userImage)return 'user';
+  if(!refImage)return 'ref';
+  return 'user';
+}
+
+// ---- Drag and drop ----------------------------------------------------------
+// Accept an image dropped anywhere on the compare stage. Visual affordance via
+// the .dragover class. We guard against the browser navigating to the file.
+const stageEl=document.getElementById('compare');
+const sbsEl=document.getElementById('sidebyside');
+function attachDropZone(el){
+  let dragDepth=0;
+  ['dragenter','dragover'].forEach(ev=>el.addEventListener(ev,e=>{
+    if(!e.dataTransfer)return;
+    const hasFiles=Array.from(e.dataTransfer.types||[]).includes('Files');
+    if(!hasFiles)return;
+    e.preventDefault();e.dataTransfer.dropEffect='copy';
+    if(ev==='dragenter')dragDepth++;
+    el.classList.add('dragover');
+  }));
+  el.addEventListener('dragleave',e=>{
+    dragDepth=Math.max(0,dragDepth-1);
+    if(dragDepth===0)el.classList.remove('dragover');
+  });
+  el.addEventListener('drop',e=>{
+    if(!e.dataTransfer)return;
+    e.preventDefault();dragDepth=0;el.classList.remove('dragover');
+    const files=Array.from(e.dataTransfer.files||[]).filter(f=>/^image\//.test(f.type||'')||/\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(f.name||''));
+    if(!files.length)return;
+    // If two images are dropped together and both slots are empty, fill yours then ref.
+    if(files.length>=2&&!userImage&&!refImage){
+      ingestImage(files[0],'user');
+      // slight stagger so skeletons/detection don't fight for the same frame
+      setTimeout(()=>ingestImage(files[1],'ref'),60);
+    }else{
+      ingestImage(files[0],slotForAdHoc());
+    }
+  });
+}
+attachDropZone(stageEl);
+attachDropZone(sbsEl);
+
+// ---- Paste ------------------------------------------------------------------
+// Ctrl/Cmd+V with an image on the clipboard loads it into the next open slot.
+window.addEventListener('paste',e=>{
+  const items=e.clipboardData&&e.clipboardData.items;if(!items)return;
+  for(const it of items){
+    if(it.type&&it.type.indexOf('image')===0){
+      const blob=it.getAsFile();
+      if(blob){ e.preventDefault(); ingestImage(blob,slotForAdHoc()); return; }
+    }
+  }
+});
+
+/* Start over: clear everything back to the initial state */
+document.getElementById('resetBtn').onclick=()=>{
+  refImage=userImage=null;refAuto=userAuto=null;refPts=[];userPts=[];userWarpSrc=null;
+  isAligned=false;compared=false;manuallyAligned=false;phase=null;
+  refFileEl.value='';userFileEl.value='';
+  setPct(50);resetZoom();
+  mode='wipe';
+  modebar.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('active',x.dataset.mode==='wipe'));
+  pickwrap.classList.remove('show');resetPickZoom();
+  sbsUserMode='aligned';
+  sbsToggle.querySelectorAll('button').forEach(x=>x.classList.toggle('active',x.dataset.sbs==='aligned'));
+  rctx.clearRect(0,0,refCanvas.width,refCanvas.height);
+  uctx.clearRect(0,0,userCanvas.width,userCanvas.height);
+  sbsRctx.clearRect(0,0,sbsRef.width,sbsRef.height);
+  sbsUctx.clearRect(0,0,sbsUser.width,sbsUser.height);
+  userCanvas.style.display='none';
+  sideEl.classList.remove('show');compareEl.style.display='';
+  handle.style.display='';topLayer.style.opacity='1';
+  bottomLayer.style.zIndex='';bottomLayer.style.opacity='1';
+  topLayer.style.clipPath='inset(0 50% 0 0)';
+  document.getElementById('onionBar').classList.remove('show');
+  emptyState.style.display='';
+  {const o=document.getElementById('onboard');if(o)o.classList.remove('hide');}
+  compareEl.classList.add('pre-upload');
+  hideSkel('user');hideSkel('ref');
+  alignBtn.disabled=true;
+  if(typeof updateSaveEnabled==='function')updateSaveEnabled();
+  setStep(0);
+  hint.innerHTML='Step 1: Upload your card';
+};
+
+function maybeReady(){
+  if(mode==='side')drawSideBySide();
+  refreshStepAvailability();
+  if(typeof updateSaveEnabled==='function')updateSaveEnabled();
+  const s1=document.getElementById('s1'),s2=document.getElementById('s2');
+  if(userImage){s1.classList.remove('active');s1.classList.add('done');}
+  if(refImage){s2.classList.remove('active');s2.classList.add('done');}
+  if(refImage&&userImage){alignBtn.disabled=false;
+    // Show the result in a comparison view. Preserve Side-by-side if the user is
+    // already in it; otherwise default to Swipe so a fresh alignment is visible.
+    const wasSide=(mode==='side');
+    if(mode!=='side'){
+      mode='wipe';
+      modebar.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('active',x.dataset.mode==='wipe'));
+    }
+    if(refAuto&&userAuto){
+      // Both cards auto-detected. Prefer accurate interior landmarks; the
+      // chooser falls back to refined border corners when landmarks are weak.
+      const auto=buildAutoAlignment(refAuto,userAuto);
+      if(auto){
+        refPts=auto.refPts;userPts=auto.userPts;
+        computeAndDraw();applyMode();
+        setStep(2); // Compare step becomes active
+        flashAligned(); // subtle success pulse so the auto-align is felt, not just done
+        const via=auto.source==='landmarks'
+          ? 'Auto-aligned from interior print features (most accurate).'
+          : 'Auto-aligned from detected borders.';
+        hint.innerHTML=via+' '
+          +'Use Swipe, Overlay, or Side by side to compare &mdash; or tap "Manually align points" if the auto-align looks off.';
+      }else{
+        refPts=refAuto.slice();userPts=userAuto.slice();
+        computeAndDraw();applyMode();
+        setStep(2);
+        flashAligned();
+        hint.innerHTML='Auto-aligned from detected borders. '
+          +'Use Swipe, Overlay, or Side by side to compare &mdash; or tap "Manually align points" if the auto-align looks off.';
+      }
+    }else{
+      isAligned=false;applyMode();
+      setStep(2); // Compare still active; suggest manual align
+      hint.innerHTML='Both cards loaded, but auto-detect couldn\'t find a clean border. '
+        +'Tap "Manually align points" to mark the four border corners on each card.';
+    }
+    // If both cards were dropped straight into Side-by-side, the comparison is
+    // already on screen — so don't leave the Compare step glowing as a to-do.
+    if(wasSide)markCompared();
+  }
+}
+
+/* point picking */
+let pickImgFit=null; // {s, offX, offY} mapping stage-coords <-> natural image coords
+alignBtn.onclick=()=>startPick('ref');
+
+/* size pick canvas to the stage and draw the image contained */
+function drawPick(img){
+  const r=pickStage.getBoundingClientRect();
+  // High-res internal buffer (see bufferDims) so zooming the picker stays sharp.
+  const [bw,bh]=bufferDims(r.width,r.height);
+  pickCanvas.width=bw;pickCanvas.height=bh;
+  pctx.setTransform(1,0,0,1,0,0);
+  pctx.imageSmoothingEnabled=true;pctx.imageSmoothingQuality='high';
+  pctx.clearRect(0,0,bw,bh);
+  const bufScaleX=bw/r.width, bufScaleY=bh/r.height;
+  const s=Math.min(r.width/img.naturalWidth, r.height/img.naturalHeight); // CSS-space contain scale
+  const wCss=img.naturalWidth*s, hCss=img.naturalHeight*s;
+  const offXCss=(r.width-wCss)/2, offYCss=(r.height-hCss)/2;
+  pctx.drawImage(img, offXCss*bufScaleX, offYCss*bufScaleY, wCss*bufScaleX, hCss*bufScaleY);
+  // pickImgFit stays in CSS/stage coordinates (used by renderDots); bufScale lets
+  // pickAt map via the canvas's real on-screen rect (same basis as the loupe).
+  pickImgFit={s, offX:offXCss, offY:offYCss, bufScaleX, bufScaleY};
+}
+function applyPickTransform(){
+  pickPan.style.transform='translate('+pPanX+'px,'+pPanY+'px) scale('+pZoom+')';
+  pickZoomLabel.textContent = pZoom>1 ? Math.round(pZoom*100)+'%' : 'Zoom';
+  pickStage.style.cursor = pZoom>1 ? 'grab' : '';
+  positionDots();
+}
+function clampPickPan(){
+  const r=pickStage.getBoundingClientRect();
+  const maxX=(pZoom-1)*r.width, maxY=(pZoom-1)*r.height;
+  pPanX=Math.max(-maxX,Math.min(0,pPanX));
+  pPanY=Math.max(-maxY,Math.min(0,pPanY));
+}
+function pickZoomAt(factor,cx,cy){
+  const r=pickStage.getBoundingClientRect();
+  const ox=cx-r.left, oy=cy-r.top; // pointer within stage
+  const prev=pZoom;
+  let next=Math.max(1,Math.min(8,pZoom*factor));
+  if(next===prev)return;
+  // keep point under cursor fixed (transform-origin 0 0)
+  pPanX=ox-(ox-pPanX)*(next/prev);
+  pPanY=oy-(oy-pPanY)*(next/prev);
+  pZoom=next;
+  if(pZoom===1){pPanX=0;pPanY=0;}
+  clampPickPan();applyPickTransform();
+}
+function setPickZoomMode(on){
+  pZoomMode=on;
+  pickZoomBtn.classList.toggle('active',on);
+  pickZoomBtn.setAttribute('aria-pressed',on?'true':'false');
+  if(!on){pZoom=1;pPanX=0;pPanY=0;applyPickTransform();}
+}
+function resetPickZoom(){pZoom=1;pPanX=0;pPanY=0;pZoomMode=false;
+  pickZoomBtn.classList.remove('active');pickZoomBtn.setAttribute('aria-pressed','false');
+  applyPickTransform();}
+pickZoomBtn.onclick=()=>setPickZoomMode(!pZoomMode);
+
+function startPick(which){
+  phase=which;
+  const img=which==='ref'?refImage:userImage;
+  if(which==='ref'){refPts=[];isAligned=false;
+    // mark s1,s2 done, activate the manual-align step (s4)
+    ['s1','s2'].forEach(id=>{const e=document.getElementById(id);e.classList.remove('active');e.classList.add('done');});
+    const s4=document.getElementById('s4');s4.classList.add('active');}
+  else{userPts=[];}
+  pickwrap.classList.add('show');
+  resetPickZoom();
+  // wait a frame so the stage has its laid-out size
+  requestAnimationFrame(()=>{drawPick(img);updatePickMsg();});
+}
+function updatePickMsg(){
+  const arr=phase==='ref'?refPts:userPts;
+  const card=phase==='ref'?'reference':'your';
+  const i=arr.length;
+  const confirmBtn=document.getElementById('pickConfirm');
+  if(i>=pickN){
+    pickMsg.innerHTML='All four points marked. Check and confirm to proceed.';
+    if(confirmBtn)confirmBtn.style.display='';
+  }else{
+    pickMsg.innerHTML='Place marker <b>'+PT_LABELS[i]+'</b> in the same location on both cards. Zoom in for improved accuracy.';
+    if(confirmBtn)confirmBtn.style.display='none';
+  }
+  renderDots(arr);
+}
+function renderDots(arr){
+  dotLayer.innerHTML='';
+  if(!pickImgFit)return;
+  arr.forEach((p,j)=>placeDot(p,j));
+  positionDots();
+}
+function placeDot(p,i){const d=document.createElement('div');
+  const cls=['a','b','c','d'][i]||'a';
+  d.className='dot '+cls;d.textContent=PT_LABELS[i];
+  // store natural coords; positionDots maps them via the canvas's real rect
+  d.dataset.nx=p.nx;d.dataset.ny=p.ny;
+  dotLayer.appendChild(d);}
+// Map each dot's natural image coord -> on-screen position using the SAME basis
+// pickAt uses (the canvas's actual bounding rect, which already includes pan/zoom),
+// so the letter sits exactly on the crosshair point that was placed.
+function positionDots(){
+  if(!pickImgFit)return;
+  const {s,offX,offY,bufScaleX,bufScaleY}=pickImgFit;
+  const cr=pickCanvas.getBoundingClientRect();
+  const lr=dotLayer.getBoundingClientRect();
+  dotLayer.querySelectorAll('.dot').forEach(d=>{
+    const nx=+d.dataset.nx, ny=+d.dataset.ny;
+    // natural -> CSS px -> buffer px -> fraction of canvas -> client -> dotLayer-local
+    const cssX=offX+nx*s, cssY=offY+ny*s;
+    const bx=cssX*bufScaleX, by=cssY*bufScaleY;
+    const clientX=cr.left + (bx/pickCanvas.width)*cr.width;
+    const clientY=cr.top  + (by/pickCanvas.height)*cr.height;
+    d.style.left=(clientX-lr.left)+'px';
+    d.style.top =(clientY-lr.top)+'px';
+  });
+}
+
+/* ---- magnifier loupe: shows a zoomed view of the spot under the finger so
+   placement isn't hidden beneath it. Single-finger press shows the loupe and a
+   provisional crosshair; drag to fine-tune; lift to place the point. ---- */
+const loupe=document.getElementById('loupe');
+const lctx=loupe.getContext('2d');
+const LOUPE_ZOOM=2.6;       // magnification inside the loupe
+function showLoupe(clientX,clientY){
+  if(!pickImgFit)return;
+  const arr=phase==='ref'?refPts:userPts;
+  if(arr.length>=pickN)return;
+  const sr=pickStage.getBoundingClientRect();
+  const lw=loupe.width, lh=loupe.height;
+  const cr=pickCanvas.getBoundingClientRect();
+  const sx=(clientX-cr.left)/cr.width*pickCanvas.width;
+  const sy=(clientY-cr.top)/cr.height*pickCanvas.height;
+  const half=(lw/LOUPE_ZOOM)/2;
+  lctx.clearRect(0,0,lw,lh);
+  lctx.imageSmoothingEnabled=true;lctx.imageSmoothingQuality='high';
+  try{ lctx.drawImage(pickCanvas, sx-half, sy-half, half*2, half*2, 0,0, lw,lh); }catch(e){}
+  lctx.strokeStyle='rgba(255,194,60,.95)';lctx.lineWidth=2;
+  lctx.beginPath();lctx.moveTo(lw/2-14,lh/2);lctx.lineTo(lw/2+14,lh/2);
+  lctx.moveTo(lw/2,lh/2-14);lctx.lineTo(lw/2,lh/2+14);lctx.stroke();
+  lctx.strokeStyle='rgba(255,255,255,.6)';lctx.lineWidth=1;
+  lctx.beginPath();lctx.arc(lw/2,lh/2,5,0,Math.PI*2);lctx.stroke();
+  const lpxW=130, lpxH=130;
+  let lx=clientX-sr.left - lpxW/2;
+  let ly=clientY-sr.top - lpxH - 28;
+  if(ly<4) ly=clientY-sr.top + 28;
+  lx=Math.max(4,Math.min(sr.width-lpxW-4,lx));
+  ly=Math.max(4,Math.min(sr.height-lpxH-4,ly));
+  loupe.style.left=lx+'px';loupe.style.top=ly+'px';
+  loupe.classList.add('show');
+}
+function hideLoupe(){loupe.classList.remove('show');}
+
+function pickAt(clientX,clientY){
+  const arr=phase==='ref'?refPts:userPts;if(arr.length>=pickN)return;
+  if(!pickImgFit)return;
+  // Map client -> canvas BUFFER px using the canvas's actual on-screen rect
+  // (this already includes the CSS pan/zoom transform), exactly like the loupe
+  // sampling does — so the stored point matches the crosshair the user saw.
+  const cr=pickCanvas.getBoundingClientRect();
+  const bx=(clientX-cr.left)/cr.width*pickCanvas.width;   // buffer px
+  const by=(clientY-cr.top)/cr.height*pickCanvas.height;
+  const {s,offX,offY,bufScaleX,bufScaleY}=pickImgFit;
+  // buffer px -> CSS px -> natural image px
+  const cssX=bx/bufScaleX, cssY=by/bufScaleY;
+  const nx=(cssX-offX)/s, ny=(cssY-offY)/s;
+  // also store stage coords for dot rendering (CSS space)
+  const stageX=cssX, stageY=cssY;
+  arr.push({nx,ny,stageX,stageY});
+  updatePickMsg();
+}
+
+/* distinguish a tap (mark) from a drag (pan). */
+let pDown=null, pMoved=false, lastAim=null;
+function pdStart(clientX,clientY,isTouch){
+  pDown={x:clientX,y:clientY,px:pPanX,py:pPanY};pMoved=false;
+  lastAim={x:clientX,y:clientY};
+  if(isTouch)showLoupe(clientX,clientY); // show magnifier immediately on touch
+}
+function pdMove(clientX,clientY){
+  if(!pDown)return false;
+  const dx=clientX-pDown.x, dy=clientY-pDown.y;
+  if(Math.abs(dx)>6||Math.abs(dy)>6)pMoved=true;
+  if(loupe.classList.contains('show')){ lastAim={x:clientX,y:clientY}; showLoupe(clientX,clientY); return true; }
+  if(pZoom>1){ // mouse drag pans when zoomed in
+    pPanX=pDown.px+dx;pPanY=pDown.py+dy;clampPickPan();applyPickTransform();return true;}
+  lastAim={x:clientX,y:clientY};
+  return false;
+}
+function pdEnd(clientX,clientY){
+  if(!pDown)return;
+  const wasTouch=loupe.classList.contains('show');
+  hideLoupe();
+  // Place at the SAME point the crosshair last rendered at (lastAim), so the
+  // marker lands exactly where it was shown — not at a touchend coordinate that
+  // can differ by a pixel or two from the last move event.
+  const aim=lastAim||{x:clientX,y:clientY};
+  if(wasTouch || !pMoved) pickAt(aim.x,aim.y);
+  pDown=null;
+}
+/* mouse */
+pickStage.addEventListener('mousedown',e=>{pdStart(e.clientX,e.clientY,false);});
+window.addEventListener('mousemove',e=>{if(pDown&&pickwrap.classList.contains('show'))pdMove(e.clientX,e.clientY);});
+window.addEventListener('mouseup',e=>{if(pDown&&pickwrap.classList.contains('show'))pdEnd(e.clientX,e.clientY);});
+/* touch + pinch + two-finger pan */
+let pPinch=null;
+function tdist(t){return Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);}
+function tmid(t){return [(t[0].clientX+t[1].clientX)/2,(t[0].clientY+t[1].clientY)/2];}
+pickStage.addEventListener('touchstart',e=>{
+  if(e.touches.length===2){pPinch={d:tdist(e.touches),mx:tmid(e.touches)[0],my:tmid(e.touches)[1],px:pPanX,py:pPanY};pDown=null;hideLoupe();e.preventDefault();return;}
+  pdStart(e.touches[0].clientX,e.touches[0].clientY,true);
+  e.preventDefault();
+},{passive:false});
+pickStage.addEventListener('touchmove',e=>{
+  if(e.touches.length===2&&pPinch){
+    const nd=tdist(e.touches),[mx,my]=tmid(e.touches);
+    // pinch to zoom...
+    if(Math.abs(nd-pPinch.d)>2){pickZoomAt(nd/pPinch.d,mx,my);pPinch.d=nd;}
+    // ...and pan with the two-finger midpoint movement
+    if(pZoom>1){pPanX=pPinch.px+(mx-pPinch.mx);pPanY=pPinch.py+(my-pPinch.my);clampPickPan();applyPickTransform();}
+    e.preventDefault();return;}
+  if(pdMove(e.touches[0].clientX,e.touches[0].clientY))e.preventDefault();
+},{passive:false});
+pickStage.addEventListener('touchend',e=>{
+  if(pPinch){if(e.touches.length<2)pPinch=null;return;}
+  if(e.changedTouches[0])pdEnd(e.changedTouches[0].clientX,e.changedTouches[0].clientY);
+  e.preventDefault();
+},{passive:false});
+/* wheel zoom */
+pickStage.addEventListener('wheel',e=>{
+  if(!pickwrap.classList.contains('show'))return;
+  e.preventDefault();
+  pickZoomAt(Math.exp(-e.deltaY*0.0015),e.clientX,e.clientY);
+},{passive:false});
+
+document.getElementById('pickUndo').onclick=()=>{
+  const arr=phase==='ref'?refPts:userPts;arr.pop();updatePickMsg();};
+document.getElementById('pickConfirm').onclick=()=>{
+  const arr=phase==='ref'?refPts:userPts;
+  if(arr.length>=pickN)finishPickPhase();};
+
+// Abort an in-progress manual pick and restore the alignment we had before.
+function cancelPick(){
+  pickwrap.classList.remove('show');phase=null;resetPickZoom();
+  if(alignSnapshot){
+    refPts=alignSnapshot.ref.slice();userPts=alignSnapshot.user.slice();
+    isAligned=alignSnapshot.isAligned;alignMode=alignSnapshot.alignMode;
+    if(isAligned){drawRef();drawUserTransformed();}
+  }
+  refreshStep4Glow(); // pick cancelled — step 4 is available again unless already aligned
+}
+
+function finishPickPhase(){
+  if(phase==='ref'){pickwrap.classList.remove('show');phase=null;startPick('user');}
+  else{pickwrap.classList.remove('show');phase=null;resetPickZoom();computeAndDraw();
+    manuallyAligned=true;
+    setStep(2); // back to Compare as the active step
+    document.getElementById('s4').classList.add('done');
+    applyMode();
+    hint.innerHTML='Manually aligned. '
+      +'Use Swipe, Overlay, or Side by side to compare.';}
+}
+
+let alignMode=2; // set when alignment is computed: 2=similarity, 4=perspective
+
+/* ---- 4-point perspective (homography) ---- */
+// Solve 8x8 linear system for homography mapping src[i]->dst[i] (4 pairs)
+function solveHomography(src,dst){
+  const A=[],b=[];
+  for(let i=0;i<4;i++){
+    const sx=src[i].x,sy=src[i].y,dx=dst[i].x,dy=dst[i].y;
+    A.push([sx,sy,1,0,0,0,-sx*dx,-sy*dx]); b.push(dx);
+    A.push([0,0,0,sx,sy,1,-sx*dy,-sy*dy]); b.push(dy);
+  }
+  const h=gauss(A,b); // [a,b,c,d,e,f,g,h]
+  return [h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1];
+}
+function gauss(A,b){
+  const n=b.length;
+  for(let c=0;c<n;c++){
+    let piv=c;
+    for(let r=c+1;r<n;r++) if(Math.abs(A[r][c])>Math.abs(A[piv][c])) piv=r;
+    [A[c],A[piv]]=[A[piv],A[c]]; [b[c],b[piv]]=[b[piv],b[c]];
+    const d=A[c][c]||1e-9;
+    for(let r=0;r<n;r++){
+      if(r===c)continue;
+      const f=A[r][c]/d;
+      for(let k=c;k<n;k++) A[r][k]-=f*A[c][k];
+      b[r]-=f*b[c];
+    }
+  }
+  return b.map((v,i)=>v/(A[i][i]||1e-9));
+}
+function applyH(H,x,y){
+  const w=H[6]*x+H[7]*y+H[8];
+  return {x:(H[0]*x+H[1]*y+H[2])/w, y:(H[3]*x+H[4]*y+H[5])/w};
+}
+// Draw user image warped so its 4 picked corners land on the ref's 4 picked corners.
+// Subdivide into a grid of triangles, affine-map each (good perspective approximation).
+function drawUserPerspective(canvas,ctx){
+  const cw=canvas.width,ch=canvas.height;
+  if(cw<2||ch<2)return; // canvas not laid out yet; skip rather than warp into nothing
+  // A 4-point alignment is a pure homography (no curvature), so the affine-
+  // triangle approximation only needs a coarse grid to stay visually exact for a
+  // card shot at a normal angle. 1150 clipped triangles froze low-end Android
+  // GPUs (clip() per triangle is costly); 8x8 = 128 triangles renders the same.
+  // We render once into a small offscreen buffer, then blit it on in one draw.
+  // The finished buffer is cached and reused when nothing relevant changed (e.g.
+  // the overlay opacity slider), so we don't re-warp on every frame.
+  const WARP_MAX=1400;
+  const k=Math.min(1, WARP_MAX/Math.max(cw,ch));
+  const bw=Math.max(1,Math.round(cw*k)), bh=Math.max(1,Math.round(ch*k));
+  // Cache key: anything that changes the warped pixels.
+  const key=bw+'x'+bh+'|uid'+imgUid(userImage)+'|rid'+imgUid(refImage)
+    +'|'+refPts.map(p=>p.nx.toFixed(2)+','+p.ny.toFixed(2)).join(';')
+    +'|'+userPts.map(p=>p.nx.toFixed(2)+','+p.ny.toFixed(2)).join(';');
+  if(!warpBuf){warpBuf=document.createElement('canvas');}
+  if(warpBuf._key!==key){
+    warpBuf.width=bw;warpBuf.height=bh;
+    const bctx=warpBuf.getContext('2d');
+    bctx.imageSmoothingEnabled=true;bctx.imageSmoothingQuality='high';
+    bctx.clearRect(0,0,bw,bh);
+    // ref corners in BUFFER space
+    const dst=refPts.map(p=>naturalToCanvas(refImage,p.nx,p.ny,bw,bh));
+    // user corners in natural image space
+    const src=userPts.map(p=>({x:p.nx,y:p.ny}));
+    const H=solveHomography(src,dst); // maps user-natural -> ref-buffer
+    const N=8; // grid resolution (homography is planar; coarse grid is exact enough)
+    const iw=userImage.naturalWidth, ih=userImage.naturalHeight;
+    // Use a downscaled proxy as the per-triangle draw source (see getUserWarpSrc).
+    const warpSrc=getUserWarpSrc();
+    const ss=warpSrc._scale||1; // natural-px -> proxy-px factor
+    // precompute projected grid
+    const grid=[];
+    for(let r=0;r<=N;r++){
+      grid[r]=[];
+      for(let c=0;c<=N;c++){
+        const sx=iw*c/N, sy=ih*r/N;
+        grid[r][c]=applyH(H,sx,sy);
+      }
+    }
+    for(let r=0;r<N;r++){
+      for(let c=0;c<N;c++){
+        const sx0=iw*c/N, sy0=ih*r/N, sx1=iw*(c+1)/N, sy1=ih*(r+1)/N;
+        const p00=grid[r][c],p10=grid[r][c+1],p01=grid[r+1][c],p11=grid[r+1][c+1];
+        drawTri(bctx,warpSrc,ss,sx0,sy0,sx1,sy0,sx0,sy1, p00,p10,p01);
+        drawTri(bctx,warpSrc,ss,sx1,sy0,sx1,sy1,sx0,sy1, p10,p11,p01);
+      }
+    }
+    warpBuf._key=key;
+  }
+  // Single blit of the finished warp onto the (larger) target canvas.
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  ctx.drawImage(warpBuf,0,0,warpBuf.width,warpBuf.height,0,0,cw,ch);
+}
+// Affine-map a source triangle (image px) onto a dest triangle (canvas px).
+// src/ss: the draw source and the factor converting natural-px source coords
+// into that source's own pixel space.
+function drawTri(ctx,srcImg,ss,sx0,sy0,sx1,sy1,sx2,sy2,d0,d1,d2){
+  ctx.save();
+  // Expand the clip triangle slightly outward from its centroid so adjacent
+  // triangles overlap by a fraction of a pixel — this hides the antialiased
+  // seams that otherwise appear as diagonal lines across the warped image.
+  const cx=(d0.x+d1.x+d2.x)/3, cy=(d0.y+d1.y+d2.y)/3;
+  const grow=0.6; // pixels of outward expansion
+  function ext(p){const vx=p.x-cx,vy=p.y-cy;const len=Math.hypot(vx,vy)||1;
+    return {x:p.x+vx/len*grow, y:p.y+vy/len*grow};}
+  const e0=ext(d0),e1=ext(d1),e2=ext(d2);
+  ctx.beginPath();
+  ctx.moveTo(e0.x,e0.y);ctx.lineTo(e1.x,e1.y);ctx.lineTo(e2.x,e2.y);ctx.closePath();
+  ctx.clip();
+  // Work in proxy-source pixel space.
+  const px0=sx0*ss,py0=sy0*ss,px1=sx1*ss,py1=sy1*ss,px2=sx2*ss,py2=sy2*ss;
+  const denom=(px0*(py1-py2)-px1*(py0-py2)+px2*(py0-py1));
+  if(Math.abs(denom)<1e-6){ctx.restore();return;}
+  const a=(d0.x*(py1-py2)-d1.x*(py0-py2)+d2.x*(py0-py1))/denom;
+  const b=(d0.y*(py1-py2)-d1.y*(py0-py2)+d2.y*(py0-py1))/denom;
+  const cc=(d0.x*(px1-px2)-d1.x*(px0-px2)+d2.x*(px0-px1))/-denom;
+  const d=(d0.y*(px1-px2)-d1.y*(px0-px2)+d2.y*(px0-px1))/-denom;
+  const e=d0.x-a*px0-cc*py0;
+  const f=d0.y-b*px0-d*py0;
+  ctx.transform(a,b,cc,d,e,f);
+  ctx.drawImage(srcImg,0,0);
+  ctx.restore();
+}
+
+function computeTransform(cw,ch){
+  // derive the similarity transform from the stored alignment points at the given size
+  const refA=naturalToCanvas(refImage,refPts[0].nx,refPts[0].ny,cw,ch);
+  const refB=naturalToCanvas(refImage,refPts[1].nx,refPts[1].ny,cw,ch);
+  const uA={x:userPts[0].nx,y:userPts[0].ny},uB={x:userPts[1].nx,y:userPts[1].ny};
+  const dU={x:uB.x-uA.x,y:uB.y-uA.y},dR={x:refB.x-refA.x,y:refB.y-refA.y};
+  const lenU=Math.hypot(dU.x,dU.y)||1,lenR=Math.hypot(dR.x,dR.y)||1;
+  const scale=lenR/lenU;
+  const rot=Math.atan2(dR.y,dR.x)-Math.atan2(dU.y,dU.x);
+  const cos=Math.cos(rot),sin=Math.sin(rot);
+  const ruAx=scale*(cos*uA.x-sin*uA.y),ruAy=scale*(sin*uA.x+cos*uA.y);
+  return {scale,rot,tx:refA.x-ruAx,ty:refA.y-ruAy};
+}
+function naturalToCanvas(img,nx,ny,cw,ch){
+  const s=Math.min(cw/img.naturalWidth,ch/img.naturalHeight);
+  const w=img.naturalWidth*s,h=img.naturalHeight*s;
+  const offX=(cw-w)/2,offY=(ch-h)/2;
+  return {x:offX+nx*s,y:offY+ny*s};
+}
+/* ---------- Automatic alignment-corner detection ----------
+   Aligns on the INNER edge of the card's yellow border (where the yellow frame
+   meets the artwork/text area) — a consistent landmark across cards.
+   Method: locate the card vs background, detect yellow-frame pixels, then for
+   each side scan inward to the first non-yellow pixel after passing through
+   yellow. Robust-fit a line to each side's inner-edge points and intersect the
+   four lines to get true corners (handles tilt/perspective).
+   Returns [TL,TR,BR,BL] as {nx,ny} in natural coords, or null if unreliable. */
+function detectCorners(img){
+  try{
+    const MAX=500;
+    const iw=img.naturalWidth, ih=img.naturalHeight;
+    const scale=Math.min(1,MAX/Math.max(iw,ih));
+    const w=Math.max(1,Math.round(iw*scale)), h=Math.max(1,Math.round(ih*scale));
+    const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+    const cx=cv.getContext('2d',{willReadFrequently:true});
+    cx.drawImage(img,0,0,w,h);
+    const data=cx.getImageData(0,0,w,h).data;
+    const idx=(x,y)=>(y*w+x)*4;
+    const isYellow=(x,y)=>{const i=idx(x,y);const r=data[i],g=data[i+1],b=data[i+2];
+      return r>140&&g>110&&b<130&&((r+g)/2-b)>45;};
+
+    // Card vs background, to bound the yellow frame.
+    const band=Math.max(2,Math.round(Math.min(w,h)*0.03));
+    const samples=[];
+    for(let x=0;x<w;x+=2){for(let y=0;y<band;y++){samples.push(idx(x,y));samples.push(idx(x,h-1-y));}}
+    for(let y=0;y<h;y+=2){for(let x=0;x<band;x++){samples.push(idx(x,y));samples.push(idx(w-1-x,y));}}
+    const med=off=>{const a=samples.map(i=>data[i+off]).sort((p,q)=>p-q);return a[a.length>>1];};
+    const bg=[med(0),med(1),med(2)];
+    let varSum=0;for(const i of samples){varSum+=Math.abs(data[i]-bg[0])+Math.abs(data[i+1]-bg[1])+Math.abs(data[i+2]-bg[2]);}
+    const th=Math.max(45,(varSum/samples.length)*2.2);
+    let x0=w,x1=0,y0=h,y1=0,fgCount=0;
+    for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+      const i=idx(x,y);
+      const d=Math.abs(data[i]-bg[0])+Math.abs(data[i+1]-bg[1])+Math.abs(data[i+2]-bg[2]);
+      if(d>th){fgCount++;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;}
+    }
+    // Fallback bounding: when the photo background is itself yellow/tan (e.g. a
+    // wooden desk or a hand), card-vs-background subtraction collapses and we
+    // get almost no foreground. In that case bound the card by its own yellow
+    // FRAME instead, which is the most saturated yellow region in the photo and
+    // is what actually separates the card from a tan surface.
+    if(fgCount/(w*h)<0.10){
+      let yx0=w,yx1=0,yy0=h,yy1=0,yCount=0;
+      for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+        if(isYellow(x,y)){yCount++;if(x<yx0)yx0=x;if(x>yx1)yx1=x;if(y<yy0)yy0=y;if(y>yy1)yy1=y;}
+      }
+      // Need a real frame: enough yellow pixels spanning a card-sized region.
+      const spanOK=(yx1-yx0)>w*0.4 && (yy1-yy0)>h*0.4;
+      if(yCount/(w*h)>=0.06 && spanOK){
+        x0=yx0;x1=yx1;y0=yy0;y1=yy1;fgCount=yCount;
+      }else{
+        return null;
+      }
+    }
+
+    // The four corners we want are the INNER corners of the yellow border (where
+    // the yellow frame meets the card's interior content). Pokémon cards have a
+    // thick yellow border, so for each scan line we walk inward from the card's
+    // outer edge, pass through the yellow band, and take the first pixel past it.
+    // That transition is the inner border. Lines are then fitted to those points
+    // (with outlier rejection) and intersected for clean corners.
+    const MINRUN=Math.max(2,Math.round(Math.min(w,h)*0.012)); // min yellow band thickness
+    const INNER_RUN=Math.max(6,Math.round(Math.min(w,h)*0.05)); // interior must continue non-yellow this far
+    // Walk inward; accept the inner edge only where a real yellow band is
+    // followed by a substantial non-yellow interior. This skips thin non-yellow
+    // gaps embedded in the border (e.g. the copyright text on the bottom edge)
+    // that would otherwise stop the scan too early.
+    function scanLine(get,lenInner,a0,a1){
+      // get(t) -> isYellow at position t along the scan; a0..a1 inclusive range
+      let run=0;
+      for(let t=a0;t!==a1+lenInner.step;t+=lenInner.step){
+        if(t<Math.min(a0,a1)||t>Math.max(a0,a1))break;
+        if(get(t)){run++;}
+        else{
+          if(run>=MINRUN){
+            // candidate inner edge at t; verify interior stays non-yellow
+            let ok=0,tt=t;
+            for(let k=0;k<INNER_RUN;k++,tt+=lenInner.step){
+              if(tt<Math.min(a0,a1)||tt>Math.max(a0,a1))break;
+              if(get(tt))break; ok++;
+            }
+            if(ok>=Math.min(INNER_RUN,3)) return t;
+          }
+          run=0;
+        }
+      }
+      return -1;
+    }
+    function scanH(y,fromLeft){
+      const step=fromLeft?1:-1, a0=fromLeft?x0:x1, a1=fromLeft?x1:x0;
+      return scanLine(x=>isYellow(x,y),{step},a0,a1);
+    }
+    function scanV(x,fromTop){
+      const step=fromTop?1:-1, a0=fromTop?y0:y1, a1=fromTop?y1:y0;
+      return scanLine(y=>isYellow(x,y),{step},a0,a1);
+    }
+    const Lpts=[],Rpts=[],Tpts=[],Bpts=[];
+    for(let y=y0;y<=y1;y++){
+      const l=scanH(y,true);if(l>=0)Lpts.push([y,l]);
+      const r=scanH(y,false);if(r>=0)Rpts.push([y,r]);
+    }
+    for(let x=x0;x<=x1;x++){
+      const t=scanV(x,true);if(t>=0)Tpts.push([x,t]);
+      const b=scanV(x,false);if(b>=0)Bpts.push([x,b]);
+    }
+    // keep central 70% of each edge to avoid corner rounding
+    const central=(pts,lo,hi)=>{const a=lo+0.15*(hi-lo),b=lo+0.85*(hi-lo);
+      return pts.filter(p=>p[0]>=a&&p[0]<=b);};
+    function fitLine(pts){
+      if(pts.length<8) return null;
+      let t=pts.map(p=>p[0]),v=pts.map(p=>p[1]),m=0,c=0;
+      for(let it=0;it<4;it++){
+        const n=t.length;let st=0,sv=0,stt=0,stv=0;
+        for(let i=0;i<n;i++){st+=t[i];sv+=v[i];stt+=t[i]*t[i];stv+=t[i]*v[i];}
+        const den=n*stt-st*st||1e-9;m=(n*stv-st*sv)/den;c=(sv-m*st)/n;
+        const res=t.map((ti,i)=>Math.abs(v[i]-(m*ti+c)));
+        const sorted=[...res].sort((p,q)=>p-q);const medr=sorted[sorted.length>>1]+1e-6;
+        const nt=[],nv=[];
+        for(let i=0;i<n;i++){if(res[i]<2.5*medr){nt.push(t[i]);nv.push(v[i]);}}
+        if(nt.length<8)break;t=nt;v=nv;
+      }
+      return {m,c};
+    }
+    const L=fitLine(central(Lpts,y0,y1)),Rr=fitLine(central(Rpts,y0,y1)),
+          T=fitLine(central(Tpts,x0,x1)),Bo=fitLine(central(Bpts,x0,x1));
+    if(!L||!Rr||!T||!Bo) return null;
+    // vertical line x=mV*y+cV, horizontal y=mH*x+cH
+    const inter=(V,H)=>{const x=(V.m*H.c+V.c)/(1-V.m*H.m);return [x,H.m*x+H.c];};
+    const quad=[inter(L,T),inter(Rr,T),inter(Rr,Bo),inter(L,Bo)];
+    for(const p of quad){if(p[0]<x0-8||p[0]>x1+8||p[1]<y0-8||p[1]>y1+8)return null;}
+    if(polyArea(quad)<w*h*0.08) return null;
+
+    // ---- Sub-pixel corner refinement -------------------------------------
+    // The inner-border corners found above are a good coarse estimate, but the
+    // yellow frame's embossed/holo bevel makes that exact transition fuzzy and
+    // lighting-dependent. Each corner is the meeting of two strong, repeatable
+    // print edges (the dark inner frame line against the bright interior), so
+    // we refine every corner toward the true L-shaped intersection in a small
+    // window using a Forstner/Harris-style gradient solve. This snaps the four
+    // correspondences onto a sharper, more consistent feature than the raw
+    // border transition, which is the single biggest source of auto-align drift.
+    // Build a grayscale buffer once.
+    const gray=new Float32Array(w*h);
+    for(let p=0,q=0;p<data.length;p+=4,q++){
+      gray[q]=0.299*data[p]+0.587*data[p+1]+0.114*data[p+2];
+    }
+    const gAt=(x,y)=>gray[(y*w+x)];
+    // Refine a single corner by locating the point that minimises the weighted
+    // distance to all nearby strong edge tangents (the classic corner = the
+    // intersection of edge normals). Returns refined [x,y] or the input if the
+    // window is too weak/flat to trust.
+    function refineCorner(cxp,cyp){
+      const R=Math.max(5,Math.round(Math.min(w,h)*0.022)); // search radius
+      const x0i=Math.max(1,Math.round(cxp)-R), x1i=Math.min(w-2,Math.round(cxp)+R);
+      const y0i=Math.max(1,Math.round(cyp)-R), y1i=Math.min(h-2,Math.round(cyp)+R);
+      if(x1i-x0i<4||y1i-y0i<4) return [cxp,cyp];
+      // Accumulate normal equations: sum( g g^T ) p = sum( g g^T x ), where g is
+      // the image gradient at each pixel and x its position. Weighting by
+      // gradient magnitude focuses the fit on the two crossing border edges.
+      let a11=0,a12=0,a22=0,b1=0,b2=0,wsum=0,gmax=0;
+      const mags=[];
+      for(let y=y0i;y<=y1i;y++)for(let x=x0i;x<=x1i;x++){
+        const gx=(gAt(x+1,y)-gAt(x-1,y))*0.5;
+        const gy=(gAt(x,y+1)-gAt(x,y-1))*0.5;
+        const m=gx*gx+gy*gy;
+        mags.push(m); if(m>gmax)gmax=m;
+      }
+      if(gmax<1e-3) return [cxp,cyp];
+      // Gaussian falloff from the coarse corner keeps the solve local & stable.
+      const sig=R*0.6, inv2s2=1/(2*sig*sig);
+      let k=0;
+      for(let y=y0i;y<=y1i;y++)for(let x=x0i;x<=x1i;x++){
+        const m=mags[k++];
+        if(m<gmax*0.06) continue;            // ignore flat interior / paper
+        const gx=(gAt(x+1,y)-gAt(x-1,y))*0.5;
+        const gy=(gAt(x,y+1)-gAt(x,y-1))*0.5;
+        const dx=x-cxp, dy=y-cyp;
+        const wgt=Math.exp(-(dx*dx+dy*dy)*inv2s2);
+        const a=gx*gx*wgt, bb=gx*gy*wgt, c=gy*gy*wgt;
+        a11+=a; a12+=bb; a22+=c;
+        b1+=(a*x+bb*y); b2+=(bb*x+c*y);
+        wsum+=wgt;
+      }
+      const det=a11*a22-a12*a12;
+      if(wsum<6||Math.abs(det)<1e-6) return [cxp,cyp]; // ill-conditioned -> keep coarse
+      const rx=( a22*b1-a12*b2)/det;
+      const ry=(-a12*b1+a11*b2)/det;
+      // Reject runaway solutions; only trust refinements that stay in-window.
+      if(!isFinite(rx)||!isFinite(ry)) return [cxp,cyp];
+      if(Math.abs(rx-cxp)>R||Math.abs(ry-cyp)>R) return [cxp,cyp];
+      return [rx,ry];
+    }
+    const refined=quad.map(p=>refineCorner(p[0],p[1]));
+    // Sanity: refined quad must stay convex-ish and similar in area to coarse.
+    let useRefined=true;
+    const ra=polyArea(refined), qa=polyArea(quad);
+    if(!(ra>qa*0.7&&ra<qa*1.4)) useRefined=false;
+    for(const p of refined){if(!isFinite(p[0])||!isFinite(p[1]))useRefined=false;}
+    const out=useRefined?refined:quad;
+    // -----------------------------------------------------------------------
+
+    const result=out.map(p=>({nx:p[0]/scale, ny:p[1]/scale}));
+    // Attach the working buffers (downscaled space) so the landmark detector
+    // can reuse them without re-rasterising the image. quadDS is the refined
+    // inner-border quad in that same downscaled space: [TL,TR,BR,BL].
+    result.meta={gray, w, h, scale, quadDS:out};
+    return result;
+  }catch(err){return null;}
+}
+
+/* ============================================================
+   Interior landmark detection (the accurate path).
+   ------------------------------------------------------------
+   The inner-border corners give a reliable card RECTANGLE, but the corners
+   themselves are the least repeatable feature (embossed/holo bevel, edge wear).
+   Far more stable are INTERIOR print marks that are identical on both the
+   "mine" and "ref" scans of the same card:
+       - the type/energy symbol at top-right
+       - the illustrator + copyright text block at bottom-left
+       - the collector card number at bottom-right
+       - the species/length-weight banner edges (mid card)
+   We do NOT try to recognise what each mark is. Instead we use the detected
+   quad to define a normalised card space, drop candidate anchors at the fixed
+   fractional positions where these marks live on every WotC-era card, and let
+   each anchor snap to the strongest nearby high-contrast blob. Because the
+   layout is shared, matching is purely positional, which sidesteps the
+   Base-Set vs Jungle font/symbol differences entirely.
+   Returns an array of {nx,ny,key} in natural-image coords, or [] on failure.
+   ============================================================ */
+// Fractional (u,v) anchors in card space: u=0 left .. 1 right, v=0 top .. 1 bottom.
+// Tuned to the shared WotC layout; each is a region we expect a strong mark in.
+const LANDMARK_ANCHORS=[
+  {key:'type',   u:0.905, v:0.052, ru:0.07, rv:0.045}, // top-right energy symbol
+  {key:'illus',  u:0.120, v:0.952, ru:0.11, rv:0.030}, // bottom-left illustrator text
+  {key:'number', u:0.880, v:0.952, ru:0.08, rv:0.030}, // bottom-right card number
+  {key:'evo',    u:0.105, v:0.075, ru:0.06, rv:0.055}, // top-left evolution/stage box
+];
+function detectLandmarks(meta){
+  if(!meta) return [];
+  const {gray,w,h,scale,quadDS}=meta;
+  const [TL,TR,BR,BL]=quadDS;
+  // Bilinear map from card space (u,v) to downscaled pixel coords using the quad.
+  const cardToPx=(u,v)=>{
+    const topx=TL[0]+(TR[0]-TL[0])*u, topy=TL[1]+(TR[1]-TL[1])*u;
+    const botx=BL[0]+(BR[0]-BL[0])*u, boty=BL[1]+(BR[1]-BL[1])*u;
+    return [topx+(botx-topx)*v, topy+(boty-topy)*v];
+  };
+  const gAt=(x,y)=>gray[(y*w+x)|0];
+  const cardW=Math.hypot(TR[0]-TL[0],TR[1]-TL[1]);
+  const cardH=Math.hypot(BL[0]-TL[0],BL[1]-TL[1]);
+  const out=[];
+  for(const a of LANDMARK_ANCHORS){
+    const [cxp,cyp]=cardToPx(a.u,a.v);
+    const rw=Math.max(4,Math.round(a.ru*cardW));
+    const rh=Math.max(4,Math.round(a.rv*cardH));
+    const x0=Math.max(1,Math.round(cxp-rw)), x1=Math.min(w-2,Math.round(cxp+rw));
+    const y0=Math.max(1,Math.round(cyp-rh)), y1=Math.min(h-2,Math.round(cyp+rh));
+    if(x1-x0<3||y1-y0<3) continue;
+    // Strong-gradient centroid: the mark is wherever local contrast concentrates.
+    // Weight each pixel by gradient magnitude; the weighted centroid is a stable,
+    // sub-pixel anchor that tracks the same printed shape on both cards.
+    let sx=0,sy=0,sw=0,gmax=0;const mg=[];
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+      const gx=(gAt(x+1,y)-gAt(x-1,y))*0.5;
+      const gy=(gAt(x,y+1)-gAt(x,y-1))*0.5;
+      const m=Math.hypot(gx,gy);mg.push(m);if(m>gmax)gmax=m;
+    }
+    if(gmax<4) continue; // essentially flat -> no usable mark here
+    let k=0;
+    for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){
+      const m=mg[k++];
+      if(m<gmax*0.35) continue; // keep only the marked strokes
+      sx+=x*m; sy+=y*m; sw+=m;
+    }
+    if(sw<gmax*2) continue; // too little structure to trust
+    const fx=sx/sw, fy=sy/sw;
+    // Confidence: how concentrated the structure is (avoids locking onto noise).
+    out.push({nx:fx/scale, ny:fy/scale, key:a.key, conf:sw});
+  }
+  return out;
+}
+function polyArea(p){let a=0;for(let i=0;i<p.length;i++){const j=(i+1)%p.length;
+  a+=p[i][0]*p[j][1]-p[j][0]*p[i][1];}return Math.abs(a)/2;}
+
+/* ============================================================
+   Hybrid auto-alignment chooser.
+   Given both detected corner results (each carrying .meta), try the accurate
+   interior-landmark path first; fall back to refined corners otherwise.
+   Returns {refPts, userPts, source} with EXACTLY 4 correspondences so the
+   existing 4-point homography renderer is unchanged. source is 'landmarks'
+   or 'corners' (useful for the status hint).
+   ============================================================ */
+function buildAutoAlignment(refAuto, userAuto){
+  // Corner fallback is always available when both detections succeeded.
+  const cornerFallback=()=>({
+    refPts:refAuto.slice(), userPts:userAuto.slice(), source:'corners'
+  });
+  if(!refAuto||!userAuto) return null;
+  if(!refAuto.meta||!userAuto.meta) return cornerFallback();
+
+  const refLm=detectLandmarks(refAuto.meta);
+  const userLm=detectLandmarks(userAuto.meta);
+  if(!refLm.length||!userLm.length) return cornerFallback();
+
+  // Match by landmark key (same fixed layout position on both cards).
+  const byKey=arr=>{const m={};for(const p of arr)m[p.key]=p;return m;};
+  const rK=byKey(refLm), uK=byKey(userLm);
+  const matched=[];
+  for(const a of LANDMARK_ANCHORS){
+    if(rK[a.key]&&uK[a.key]) matched.push({key:a.key, r:rK[a.key], u:uK[a.key]});
+  }
+  // Need 4 well-spread matches to drive the perspective transform directly.
+  // With fewer, the corners (which always span the full card) are safer.
+  if(matched.length<4) return cornerFallback();
+
+  // Spread check: the 4 matched points must enclose a meaningful area on BOTH
+  // cards (guards against all four collapsing onto one region from a misfire).
+  const rQuad=matched.map(m=>[m.r.nx,m.r.ny]);
+  const uQuad=matched.map(m=>[m.u.nx,m.u.ny]);
+  const rImgA=refAuto.meta.w*refAuto.meta.h/(refAuto.meta.scale*refAuto.meta.scale);
+  const uImgA=userAuto.meta.w*userAuto.meta.h/(userAuto.meta.scale*userAuto.meta.scale);
+  if(polyArea(rQuad)<rImgA*0.10||polyArea(uQuad)<uImgA*0.10) return cornerFallback();
+
+  // Correspondence is already key-aligned: matched[i] is the same landmark on
+  // both cards, so index i pairs correctly for the homography solve.
+  const refPts=[], userPts=[];
+  for(const m of matched){ refPts.push({nx:m.r.nx,ny:m.r.ny}); userPts.push({nx:m.u.nx,ny:m.u.ny}); }
+  return {refPts, userPts, source:'landmarks'};
+}
+
+function computeAndDraw(){
+  isAligned=true;
+  alignMode=(refPts.length>=4 && userPts.length>=4)?4:2;
+  drawRef();drawUserTransformed();
+}
+
+/* ============================================================
+   Saved comparisons: in-app library (IndexedDB) + file export/import.
+   A saved comparison stores both images (downscaled) and the alignment
+   points, so it reopens into any compare mode.
+   ============================================================ */
+const DB_NAME='cardCompareDB', DB_STORE='comparisons', DB_VER=1;
+function openDB(){
+  return new Promise((res,rej)=>{
+    const req=indexedDB.open(DB_NAME,DB_VER);
+    req.onupgradeneeded=()=>{const db=req.result;
+      if(!db.objectStoreNames.contains(DB_STORE))db.createObjectStore(DB_STORE,{keyPath:'id'});};
+    req.onsuccess=()=>res(req.result);
+    req.onerror=()=>rej(req.error);
+  });
+}
+function dbPut(rec){return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).put(rec);
+  tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);}));}
+function dbDelete(id){return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(DB_STORE,'readwrite');tx.objectStore(DB_STORE).delete(id);
+  tx.oncomplete=()=>res();tx.onerror=()=>rej(tx.error);}));}
+function dbAll(){return openDB().then(db=>new Promise((res,rej)=>{
+  const tx=db.transaction(DB_STORE,'readonly');const rq=tx.objectStore(DB_STORE).getAll();
+  rq.onsuccess=()=>res(rq.result||[]);rq.onerror=()=>rej(rq.error);}));}
+
+// Downscale an <img> to a JPEG data URL (long side <= maxSide) to keep storage small.
+function imgToDataURL(img,maxSide=1500,quality=0.85){
+  const iw=img.naturalWidth,ih=img.naturalHeight;
+  const s=Math.min(1,maxSide/Math.max(iw,ih));
+  const w=Math.max(1,Math.round(iw*s)),h=Math.max(1,Math.round(ih*s));
+  const c=document.createElement('canvas');c.width=w;c.height=h;
+  const cx=c.getContext('2d');cx.drawImage(img,0,0,w,h);
+  return c.toDataURL('image/jpeg',quality);
+}
+function loadImageFromURL(url){return new Promise((res,rej)=>{
+  const im=new Image();im.onload=()=>res(im);im.onerror=()=>rej(new Error('bad image'));im.src=url;});}
+
+// Build the serialisable record for the current comparison.
+// Points are stored relative to each image's natural size so they survive
+// the downscale (they're fractions 0..1).
+function currentComparison(name){
+  function relPts(pts,img){return pts.map(p=>[p.nx/img.naturalWidth,p.ny/img.naturalHeight]);}
+  return {
+    id:'cmp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+    name:name||('Comparison '+new Date().toLocaleString()),
+    created:Date.now(),
+    schema:1,
+    userImg:imgToDataURL(userImage),
+    refImg:imgToDataURL(refImage),
+    userPtsRel:relPts(userPts,userImage),
+    refPtsRel:relPts(refPts,refImage),
+    isAligned, alignMode
+  };
+}
+
+// Restore a saved record into the live app.
+async function restoreComparison(rec){
+  galleryModal.classList.remove('show');galleryModal.setAttribute('aria-hidden','true');
+  const [uImg,rImg]=await Promise.all([loadImageFromURL(rec.userImg),loadImageFromURL(rec.refImg)]);
+  userImage=uImg;refImage=rImg;
+  // Invalidate cached warp artefacts from any previously-loaded card. Both caches
+  // key on image dimensions + point positions, which can COLLIDE between two
+  // different cards (Base-set cards share sizes, saved points can coincide), so
+  // without this the top layer would blit the previous card's warped pixels —
+  // the "stale Yours" bug. Clearing forces a fresh warp for this card.
+  userWarpSrc=null;
+  if(warpBuf){warpBuf._key=null;}
+  const abs=(rel,img)=>rel.map(p=>({nx:p[0]*img.naturalWidth, ny:p[1]*img.naturalHeight}));
+  userPts=abs(rec.userPtsRel||[],uImg);
+  refPts=abs(rec.refPtsRel||[],rImg);
+  refAuto=null;userAuto=null; // came from a save, not a fresh detection
+  compared=true;manuallyAligned=false;phase=null;
+  emptyState.style.display='none';
+  hideOnboard();
+  pickwrap.classList.remove('show');resetPickZoom();resetZoom();
+  // Always return to the swipe stage and wipe every canvas BEFORE drawing, so a
+  // previously-loaded card (e.g. left over from side-by-side) can't linger in
+  // either layer. Clearing up front guarantees no stale frame survives the reload.
+  sideEl.classList.remove('show');compareEl.style.display='';
+  mode='wipe';
+  modebar.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('active',x.dataset.mode==='wipe'));
+  [uctx,rctx].forEach(cx=>{try{cx.clearRect(0,0,cx.canvas.width,cx.canvas.height);}catch(e){}});
+  [sbsUctx,sbsRctx].forEach(cx=>{try{cx.clearRect(0,0,cx.canvas.width,cx.canvas.height);}catch(e){}});
+  // Decide alignment state from the saved record, then let applyMode() switch the
+  // display and schedule the (re)draw once layout has settled — drawing here,
+  // before the stage is shown, is what previously left the top canvas stale.
+  if(rec.isAligned && userPts.length>=4 && refPts.length>=4){
+    isAligned=true;alignMode=4;
+  }else{
+    isAligned=false;alignMode=(rec.alignMode||2);
+  }
+  applyMode();          // shows the compare stage and calls scheduleRedraw()
+  scheduleRedraw();     // force an immediate + delayed repaint of both layers
+  setStep(2);
+  document.getElementById('s1').classList.add('done');
+  document.getElementById('s2').classList.add('done');
+  refreshStepAvailability();updateSaveEnabled();
+  hint.innerHTML='Loaded from your library. Use Swipe, Overlay, or Side by side to compare.';
+}
+
+const galleryModal=document.getElementById('galleryModal');
+const galleryGrid=document.getElementById('galleryGrid');
+const galleryEmpty=document.getElementById('galleryEmpty');
+const saveBtn=document.getElementById('saveBtn');
+
+function updateSaveEnabled(){
+  const ready=!!(refImage&&userImage);
+  saveBtn.disabled=!ready;
+  const sb=document.getElementById('shareBtn'); if(sb)sb.disabled=!ready;
+}
+
+let selectMode=false;
+const selectedIds=new Set();
+
+async function renderGallery(){
+  let recs=[];
+  try{recs=await dbAll();}catch(e){recs=[];}
+  recs.sort((a,b)=>b.created-a.created);
+  galleryGrid.innerHTML='';
+  galleryEmpty.style.display=recs.length?'none':'block';
+  const exportAllBtn=document.getElementById('exportAllBtn');
+  if(exportAllBtn)exportAllBtn.disabled=!recs.length;
+  document.getElementById('selectToggleBtn').disabled=!recs.length;
+  // drop any selected ids that no longer exist
+  const liveIds=new Set(recs.map(r=>r.id));
+  for(const id of Array.from(selectedIds))if(!liveIds.has(id))selectedIds.delete(id);
+  const check='<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+  for(const rec of recs){
+    const card=document.createElement('div');card.className='gcard';
+    if(selectedIds.has(rec.id))card.classList.add('selected');
+    const aligned=rec.isAligned?'Aligned':'Not aligned';
+    card.innerHTML=
+      '<div class="selbox" role="checkbox" aria-checked="'+(selectedIds.has(rec.id)?'true':'false')+'">'+check+'</div>'+
+      '<div class="thumbs"><img src="'+rec.userImg+'" alt="yours"><img src="'+rec.refImg+'" alt="reference"></div>'+
+      '<div class="meta"><span class="gname"></span>'+
+      '<span class="gsub">'+new Date(rec.created).toLocaleDateString()+' &middot; '+aligned+'</span>'+
+      '<div class="grow"><button class="open">Open</button>'+
+      '<button class="share">Share</button>'+
+      '<button class="exp">Export</button><button class="del">Delete</button></div></div>';
+    card.querySelector('.gname').textContent=rec.name;
+    card.querySelector('.open').onclick=(ev)=>{ev.stopPropagation();restoreComparison(rec);};
+    card.querySelector('.share').onclick=(ev)=>{ev.stopPropagation();shareRecord(rec,ev.currentTarget);};
+    card.querySelector('.exp').onclick=(ev)=>{ev.stopPropagation();exportRecord(rec);};
+    card.querySelector('.del').onclick=async(ev)=>{ev.stopPropagation();
+      if(confirm('Delete "'+rec.name+'"? This cannot be undone.')){await dbDelete(rec.id);selectedIds.delete(rec.id);renderGallery();}};
+    card.querySelector('.selbox').onclick=(ev)=>{ev.stopPropagation();toggleSelect(rec.id,card);};
+    card.onclick=()=>{ if(card._suppressClick){card._suppressClick=false;return;}
+      if(selectMode){toggleSelect(rec.id,card);} else {restoreComparison(rec);} };
+    // long-press (touch) to enter selection mode and pick this card
+    let lpTimer=null, lpX=0, lpY=0;
+    const clearLP=()=>{if(lpTimer){clearTimeout(lpTimer);lpTimer=null;}};
+    card.addEventListener('touchstart',(ev)=>{
+      if(selectMode)return; // already selecting: normal tap toggles
+      const t=ev.touches[0];lpX=t.clientX;lpY=t.clientY;
+      lpTimer=setTimeout(()=>{lpTimer=null;card._suppressClick=true;
+        if(navigator.vibrate)navigator.vibrate(15);
+        if(!selectMode)setSelectMode(true);
+        selectedIds.add(rec.id);card.classList.add('selected');
+        const b=card.querySelector('.selbox');if(b)b.setAttribute('aria-checked','true');
+        updateSelUI();
+      },500);
+    },{passive:true});
+    card.addEventListener('touchmove',(ev)=>{const t=ev.touches[0];
+      if(Math.abs(t.clientX-lpX)>10||Math.abs(t.clientY-lpY)>10)clearLP();},{passive:true});
+    card.addEventListener('touchend',clearLP,{passive:true});
+    card.addEventListener('touchcancel',clearLP,{passive:true});
+    galleryGrid.appendChild(card);
+  }
+  updateSelUI();
+}
+
+function toggleSelect(id,card){
+  if(selectedIds.has(id)){selectedIds.delete(id);card.classList.remove('selected');
+    card.querySelector('.selbox').setAttribute('aria-checked','false');}
+  else{selectedIds.add(id);card.classList.add('selected');
+    card.querySelector('.selbox').setAttribute('aria-checked','true');}
+  updateSelUI();
+}
+
+function updateSelUI(){
+  galleryGrid.classList.toggle('selecting',selectMode);
+  document.getElementById('selToolbar').classList.toggle('show',selectMode);
+  const n=selectedIds.size;
+  document.getElementById('selCount').textContent=n+' selected';
+  document.getElementById('selDeleteBtn').disabled=n===0;
+  document.getElementById('selectToggleBtn').textContent=selectMode?'Cancel':'Select';
+}
+
+function setSelectMode(on){selectMode=on;if(!on)selectedIds.clear();updateSelUI();
+  // refresh cards so selected styling clears
+  galleryGrid.querySelectorAll('.gcard.selected').forEach(c=>{if(!on){c.classList.remove('selected');
+    const b=c.querySelector('.selbox');if(b)b.setAttribute('aria-checked','false');}});}
+
+document.getElementById('selectToggleBtn').onclick=()=>setSelectMode(!selectMode);
+document.getElementById('selCancelBtn').onclick=()=>setSelectMode(false);
+document.getElementById('selAllBtn').onclick=()=>{
+  galleryGrid.querySelectorAll('.gcard').forEach(c=>{const b=c.querySelector('.selbox');if(b)b.setAttribute('aria-checked','true');c.classList.add('selected');});
+  // rebuild selectedIds from all live records
+  dbAll().then(recs=>{recs.forEach(r=>selectedIds.add(r.id));updateSelUI();}).catch(()=>updateSelUI());};
+document.getElementById('selNoneBtn').onclick=()=>{selectedIds.clear();
+  galleryGrid.querySelectorAll('.gcard.selected').forEach(c=>{c.classList.remove('selected');
+    const b=c.querySelector('.selbox');if(b)b.setAttribute('aria-checked','false');});updateSelUI();};
+document.getElementById('selDeleteBtn').onclick=async()=>{
+  const n=selectedIds.size;if(!n)return;
+  if(!confirm('Delete '+n+' selected comparison'+(n>1?'s':'')+'? This cannot be undone.'))return;
+  for(const id of Array.from(selectedIds))await dbDelete(id);
+  selectedIds.clear();setSelectMode(false);renderGallery();};
+
+/* ============================================================
+   Sharing: build a labelled side-by-side image (Yours | Reference)
+   and hand it to the native share sheet. Browsers without file
+   sharing (most desktops) fall back to downloading the image.
+   ============================================================ */
+function buildShareImage(uImg,rImg,name){
+  const H=1000, pad=28, gap=20, labelH=44, titleH=name?58:0;
+  const uw=Math.max(1,Math.round(H*uImg.naturalWidth/uImg.naturalHeight));
+  const rw=Math.max(1,Math.round(H*rImg.naturalWidth/rImg.naturalHeight));
+  const W=pad*2+gap+uw+rw;
+  const c=document.createElement('canvas');
+  c.width=W; c.height=pad*2+titleH+labelH+H;
+  const cx=c.getContext('2d');
+  // background
+  cx.fillStyle='#0d0b14';cx.fillRect(0,0,c.width,c.height);
+  // title (comparison name)
+  cx.textAlign='center';cx.textBaseline='middle';
+  if(name){
+    cx.fillStyle='#ECE7FF';
+    cx.font='700 30px Inter, system-ui, sans-serif';
+    cx.fillText(name, W/2, pad+titleH/2, W-pad*2);
+  }
+  // labels above each card
+  const labelY=pad+titleH+labelH/2;
+  cx.font='700 22px Inter, system-ui, sans-serif';
+  cx.fillStyle='#FF9A3C';
+  cx.fillText('YOURS', pad+uw/2, labelY);
+  cx.fillStyle='#8E86A8';
+  cx.fillText('REFERENCE', pad+uw+gap+rw/2, labelY);
+  // cards
+  const cardY=pad+titleH+labelH;
+  cx.drawImage(uImg, pad, cardY, uw, H);
+  cx.drawImage(rImg, pad+uw+gap, cardY, rw, H);
+  // thin divider between the two
+  cx.fillStyle='#2A2440';
+  cx.fillRect(pad+uw+gap/2-1, cardY, 2, H);
+  return new Promise(res=>c.toBlob(b=>res(b),'image/jpeg',0.9));
+}
+// Generic: hand a blob to the native share sheet; fall back to downloading it.
+async function shareBlobViaSheet(blob,candidates,downloadName,title){
+  // Browsers restrict which files the share sheet accepts, and Chrome's
+  // canShare() can say yes to a file that share() then rejects. So we don't
+  // trust the pre-check alone: we attempt share() with each candidate
+  // {name, type} in order, moving to the next on rejection. AbortError means
+  // the user closed the share sheet themselves — that's not a failure, stop.
+  // Only if every candidate is rejected do we fall back to downloading.
+  if(navigator.share){
+    for(const c of candidates){
+      const f=new File([blob],c.name,{type:c.type});
+      try{ if(navigator.canShare&&!navigator.canShare({files:[f]}))continue; }catch(e){continue;}
+      try{ await navigator.share({files:[f],title:title||'Card comparison'}); return 'shared'; }
+      catch(e){ if(e&&e.name==='AbortError')return 'cancelled'; /* rejected: try next candidate */ }
+    }
+  }
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=downloadName||candidates[0].name;document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+  return 'downloaded';
+}
+function shareFilename(name,ext){
+  const safe=(name||'card-comparison').replace(/[^a-z0-9_-]+/gi,'_').slice(0,40)||'card-comparison';
+  return safe+ext;
+}
+// Brief feedback on whichever button triggered the share.
+function flashBtn(btn,text){
+  if(!btn)return;
+  const span=btn.querySelector('span')||btn;
+  const prev=span.textContent;
+  span.textContent=text;
+  setTimeout(()=>{span.textContent=prev;},1400);
+}
+
+/* Share chooser: one small dialog asks "image or comparison file?", then the
+   pending context (current comparison, or a library record) is shared. */
+const shareModal=document.getElementById('shareModal');
+let pendingShare=null; // {rec, name, btn}
+function openShareChooser(ctx){
+  pendingShare=ctx;
+  shareModal.classList.add('show');shareModal.setAttribute('aria-hidden','false');
+}
+function closeShareChooser(){
+  pendingShare=null;
+  shareModal.classList.remove('show');shareModal.setAttribute('aria-hidden','true');
+}
+document.getElementById('shareCancel').onclick=closeShareChooser;
+shareModal.addEventListener('click',e=>{if(e.target===shareModal)closeShareChooser();});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&shareModal.classList.contains('show'))closeShareChooser();});
+
+// Share the comparison currently loaded in the app.
+function shareCurrent(){
+  if(!(refImage&&userImage))return;
+  // Build the record now so the images/points are captured at tap time.
+  openShareChooser({rec:currentComparison('Card comparison'),name:'',btn:document.getElementById('shareBtn')});
+}
+// Share a saved comparison straight from the library.
+function shareRecord(rec,btn){
+  openShareChooser({rec, name:rec.name||'', btn});
+}
+
+document.getElementById('shareAsImage').onclick=async()=>{
+  const ctx=pendingShare; closeShareChooser();
+  if(!ctx)return;
+  try{
+    if(ctx.btn)ctx.btn.disabled=true;
+    const [uImg,rImg]=await Promise.all([loadImageFromURL(ctx.rec.userImg),loadImageFromURL(ctx.rec.refImg)]);
+    const blob=await buildShareImage(uImg,rImg,ctx.name);
+    const result=await shareBlobViaSheet(blob,
+      [{name:shareFilename(ctx.name,'.jpg'),type:'image/jpeg'}],
+      shareFilename(ctx.name,'.jpg'),
+      ctx.name||'Card comparison');
+    if(result==='downloaded')flashBtn(ctx.btn,'Saved \u2713');
+    else if(result==='shared')flashBtn(ctx.btn,'Shared \u2713');
+  }catch(e){ alert('Could not share this comparison: '+e.message); }
+  finally{ if(ctx.btn)ctx.btn.disabled=false; updateSaveEnabled(); }
+};
+document.getElementById('shareAsFile').onclick=async()=>{
+  const ctx=pendingShare; closeShareChooser();
+  if(!ctx)return;
+  try{
+    if(ctx.btn)ctx.btn.disabled=true;
+    const blob=new Blob([JSON.stringify(ctx.rec)],{type:'application/json'});
+    // Share as .txt — Chrome refuses to share .json files (extension allowlist),
+    // and every browser that shares files at all accepts plain text. The
+    // download fallback keeps the .json name. Import accepts both.
+    const result=await shareBlobViaSheet(blob,[
+        {name:shareFilename(ctx.name,'.cardcompare.txt'), type:'text/plain'},
+        {name:shareFilename(ctx.name,'.cardcompare.csv'), type:'text/csv'}
+      ],
+      shareFilename(ctx.name,'.cardcompare.json'),
+      ctx.name||'Card comparison');
+    if(result==='downloaded')flashBtn(ctx.btn,'Saved \u2713');
+    else if(result==='shared')flashBtn(ctx.btn,'Shared \u2713');
+  }catch(e){ alert('Could not share this comparison: '+e.message); }
+  finally{ if(ctx.btn)ctx.btn.disabled=false; updateSaveEnabled(); }
+};
+document.getElementById('shareBtn').onclick=()=>shareCurrent();
+
+function exportRecord(rec){
+  const blob=new Blob([JSON.stringify(rec)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  const safe=(rec.name||'comparison').replace(/[^a-z0-9_-]+/gi,'_').slice(0,40);
+  a.download=safe+'.cardcompare.json';
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+
+// Bulk export: bundle every saved comparison into a single .json file. The
+// bundle is a wrapper object with a type marker and an array of records, so
+// Import can tell it apart from a single-comparison file and add them all.
+async function exportAll(){
+  let recs=[];
+  try{recs=await dbAll();}catch(e){recs=[];}
+  if(!recs.length){alert('There are no saved comparisons to export yet.');return;}
+  const bundle={type:'cardcompare-bundle', schema:1, exported:Date.now(), count:recs.length, records:recs};
+  const blob=new Blob([JSON.stringify(bundle)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  const stamp=new Date().toISOString().slice(0,10);
+  a.download='card-comparisons-'+stamp+'.cardcompare.json';
+  document.body.appendChild(a);a.click();a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+
+const nameModal=document.getElementById('nameModal');
+const nameInput=document.getElementById('nameInput');
+async function doSave(name){
+  try{
+    const rec=currentComparison((name||'').trim()||undefined);
+    await dbPut(rec);
+    const span=saveBtn.querySelector('span');const prev=span.textContent;
+    span.textContent='Saved \u2713';
+    setTimeout(()=>{span.textContent=prev;},1400);
+  }catch(e){ setStatus('Save failed: '+e.message); }
+}
+function openNameDialog(){
+  nameInput.value='Comparison '+new Date().toLocaleDateString();
+  nameModal.classList.add('show');nameModal.setAttribute('aria-hidden','false');
+  setTimeout(()=>{nameInput.focus();nameInput.select();},50);
+}
+function closeNameDialog(){nameModal.classList.remove('show');nameModal.setAttribute('aria-hidden','true');}
+saveBtn.onclick=()=>{ if(!(refImage&&userImage))return; openNameDialog(); };
+document.getElementById('nameCancel').onclick=closeNameDialog;
+document.getElementById('nameSave').onclick=()=>{ const v=nameInput.value; closeNameDialog(); doSave(v); };
+nameInput.addEventListener('keydown',e=>{
+  if(e.key==='Enter'){e.preventDefault();const v=nameInput.value;closeNameDialog();doSave(v);}
+  else if(e.key==='Escape'){closeNameDialog();}
+});
+nameModal.addEventListener('click',e=>{if(e.target===nameModal)closeNameDialog();});
+
+document.getElementById('libraryBtn').onclick=()=>{
+  selectMode=false;selectedIds.clear();
+  galleryModal.classList.add('show');galleryModal.setAttribute('aria-hidden','false');
+  renderGallery();
+};
+document.getElementById('exportAllBtn').onclick=()=>exportAll();
+document.getElementById('galleryClose').onclick=()=>{
+  galleryModal.classList.remove('show');galleryModal.setAttribute('aria-hidden','true');};
+galleryModal.addEventListener('click',e=>{if(e.target===galleryModal){
+  galleryModal.classList.remove('show');galleryModal.setAttribute('aria-hidden','true');}});
+
+// Import one or more .json files from disk. Each file may be a single saved
+// comparison or a bundle (from "Export all"). All selected files are processed;
+// every valid record is added, then the most recent one is opened. A summary is
+// shown only if some files/records couldn't be read.
+const importFile=document.getElementById('importFile');
+document.getElementById('importBtn').onclick=()=>{importFile.value='';importFile.click();};
+function normalizeRecord(rec){
+  if(!rec||!rec.userImg||!rec.refImg) return null;
+  rec.id=rec.id||('cmp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7)+'_'+Math.floor(Math.random()*1e6));
+  if(!rec.created)rec.created=Date.now();
+  return rec;
+}
+function readFileText(f){
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onload=()=>res(r.result);
+    r.onerror=()=>rej(new Error('read failed'));
+    r.readAsText(f);
+  });
+}
+// Pull all valid records out of one parsed file (single or bundle).
+function recordsFromParsed(parsed){
+  if(parsed&&parsed.type==='cardcompare-bundle'&&Array.isArray(parsed.records)){
+    return parsed.records.map(normalizeRecord).filter(Boolean);
+  }
+  const one=normalizeRecord(parsed);
+  return one?[one]:[];
+}
+importFile.addEventListener('change',async e=>{
+  const files=Array.from(e.target.files||[]);
+  if(!files.length)return;
+  let added=0, badFiles=0;
+  for(const f of files){
+    try{
+      const parsed=JSON.parse(await readFileText(f));
+      const recs=recordsFromParsed(parsed);
+      if(!recs.length){badFiles++;continue;}
+      for(const rec of recs){
+        await dbPut(rec);added++;
+      }
+    }catch(err){badFiles++;}
+  }
+  if(added){
+    renderGallery();
+    if(badFiles){
+      alert('Imported '+added+' comparison'+(added===1?'':'s')+'. '
+        +badFiles+' file'+(badFiles===1?'':'s')+' could not be read and '+(badFiles===1?'was':'were')+' skipped.');
+    }
+  }else{
+    alert(files.length>1
+      ? 'None of those files could be read as saved comparisons.'
+      : 'That file could not be read as a saved comparison.');
+  }
+});
+
+updateSaveEnabled();
+
+
+</script>
+</body>
+</html>
