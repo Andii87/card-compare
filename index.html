@@ -310,6 +310,17 @@ if('serviceWorker' in navigator){
     width:42px;height:42px;border-radius:50%;cursor:pointer;
     background:var(--chip);border:1px solid var(--line);color:var(--ink);backdrop-filter:blur(8px)}
   .fsexit:hover{border-color:var(--flame)}
+  /* photo source picker (camera vs library) */
+  .src-card{width:min(420px,94vw)}
+  .src-opts{display:grid;gap:10px;padding:16px 18px 20px}
+  .src-opt{display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;column-gap:14px;
+    align-items:center;text-align:left;padding:14px 16px;border-radius:14px;cursor:pointer;
+    background:var(--chip-solid);border:1px solid var(--line);color:var(--ink);font-family:inherit;transition:.15s}
+  .src-opt svg{grid-row:1/3;color:var(--ember)}
+  .src-opt .so-t{font-weight:800;font-size:15px}
+  .src-opt .so-d{font-size:12px;color:var(--muted)}
+  @media (hover:hover){ .src-opt:hover{border-color:var(--flame);transform:translateY(-1px)} }
+  .src-opt:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
   /* saved-comparison library modal */
   .modal{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;
     background:rgba(5,4,10,.72);backdrop-filter:blur(6px);padding:18px}
@@ -498,7 +509,16 @@ if('serviceWorker' in navigator){
   <div class="controls">
     <input type="file" id="refFile" accept="image/*" style="display:none">
     <input type="file" id="userFile" accept="image/*" style="display:none">
+    <input type="file" id="refCam" accept="image/*" capture="environment" style="display:none">
+    <input type="file" id="userCam" accept="image/*" capture="environment" style="display:none">
     <button class="btn" id="alignBtn" hidden disabled>Align points</button>
+    <button class="btn iconbtn" id="rotateBtn" title="Rotate the last uploaded card 90°" disabled onclick="rotate90()">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="23 4 23 10 17 10"></polyline>
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+      </svg>
+      <span>Rotate</span>
+    </button>
     <button class="btn iconbtn" id="saveBtn" title="Save this comparison to your library" disabled>
       <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
@@ -540,6 +560,31 @@ if('serviceWorker' in navigator){
 </div>
 
 <input type="file" id="importFile" accept="application/json,text/plain,text/csv,.json,.txt,.csv" multiple style="display:none">
+<div class="modal" id="srcModal" aria-hidden="true">
+  <div class="modal-card src-card" role="dialog" aria-label="Add card photo">
+    <div class="modal-head"><h2 id="srcTitle">Add your card</h2>
+      <button class="btn iconbtn" id="srcClose" title="Close">✕</button></div>
+    <div class="src-opts">
+      <button class="src-opt" id="srcCamera">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+          <circle cx="12" cy="13" r="4"></circle>
+        </svg>
+        <span class="so-t">Take photo</span>
+        <span class="so-d">Use your phone camera</span>
+      </button>
+      <button class="src-opt" id="srcLibrary">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+          <circle cx="8.5" cy="8.5" r="1.5"></circle>
+          <polyline points="21 15 16 10 5 21"></polyline>
+        </svg>
+        <span class="so-t">Choose from library</span>
+        <span class="so-d">Pick an existing photo or file</span>
+      </button>
+    </div>
+  </div>
+</div>
 <div class="modal" id="nameModal" aria-hidden="true">
   <div class="modal-card" style="width:min(420px,94vw)">
     <div class="modal-head"><h2>Save comparison</h2></div>
@@ -1041,8 +1086,32 @@ function refreshStepAvailability(){
 const refFileEl=document.getElementById('refFile');
 const userFileEl=document.getElementById('userFile');
 // reset value before opening so re-selecting the same (or a new) file always fires change
-document.getElementById('s1').onclick=(e)=>{userFileEl.value='';userFileEl.click();if(e&&e.currentTarget)e.currentTarget.blur();};
-document.getElementById('s2').onclick=(e)=>{refFileEl.value='';refFileEl.click();if(e&&e.currentTarget)e.currentTarget.blur();};
+const userCamEl=document.getElementById('userCam');
+const refCamEl=document.getElementById('refCam');
+const srcModal=document.getElementById('srcModal');
+const srcTitle=document.getElementById('srcTitle');
+let srcTarget='user'; // which slot the picker is choosing for
+// Only phones/tablets get the camera option; desktops go straight to the file picker.
+const hasCameraUI=matchMedia('(pointer:coarse)').matches||'ontouchstart' in window;
+function openSourcePicker(which){
+  srcTarget=which;
+  if(!hasCameraUI){ // desktop: skip the sheet
+    const el=which==='user'?userFileEl:refFileEl; el.value=''; el.click(); return;
+  }
+  srcTitle.textContent=which==='user'?'Add your card':'Add reference card';
+  srcModal.classList.add('show'); srcModal.setAttribute('aria-hidden','false');
+}
+function closeSourcePicker(){srcModal.classList.remove('show');srcModal.setAttribute('aria-hidden','true');}
+document.getElementById('srcClose').onclick=closeSourcePicker;
+srcModal.addEventListener('click',e=>{if(e.target===srcModal)closeSourcePicker();});
+document.getElementById('srcCamera').onclick=()=>{
+  const el=srcTarget==='user'?userCamEl:refCamEl; el.value=''; closeSourcePicker(); el.click();
+};
+document.getElementById('srcLibrary').onclick=()=>{
+  const el=srcTarget==='user'?userFileEl:refFileEl; el.value=''; closeSourcePicker(); el.click();
+};
+document.getElementById('s1').onclick=(e)=>{openSourcePicker('user');if(e&&e.currentTarget)e.currentTarget.blur();};
+document.getElementById('s2').onclick=(e)=>{openSourcePicker('ref');if(e&&e.currentTarget)e.currentTarget.blur();};
 document.getElementById('s3').onclick=()=>{ // Compare
   if(!(refImage&&userImage))return;
   if(phase)cancelPick(); // leaving a half-finished manual pick: keep previous alignment
@@ -1220,6 +1289,29 @@ function exifOrientation(buf){
   }catch(e){}
   return 1;
 }
+// Read the true pixel width/height from the JPEG SOF marker. Comparing these to
+// the decoder's output tells us definitively whether the browser already applied
+// the EXIF rotation (dims swapped) or handed us raw pixels (dims match).
+function jpegDims(buf){
+  try{
+    const v=new DataView(buf);
+    if(v.getUint16(0)!==0xFFD8) return null;
+    let off=2; const len=v.byteLength;
+    while(off+9<len){
+      if(v.getUint8(off)!==0xFF){off++;continue;}
+      const marker=v.getUint8(off+1);
+      if(marker===0xD8||marker===0x01||(marker>=0xD0&&marker<=0xD7)){off+=2;continue;}
+      if(marker===0xDA)break;                          // start of scan — no SOF found
+      const segLen=v.getUint16(off+2);
+      if(marker>=0xC0&&marker<=0xCF&&marker!==0xC4&&marker!==0xC8&&marker!==0xCC){
+        return {h:v.getUint16(off+5), w:v.getUint16(off+7)}; // SOFn frame header
+      }
+      if(segLen<2)break;
+      off+=2+segLen;
+    }
+  }catch(e){}
+  return null;
+}
 // Given a decoded image/bitmap and an orientation, return an upright source.
 // Orientations 1 (and unknown) pass through untouched to avoid needless work.
 function applyOrientation(obj,w,h,ori){
@@ -1253,15 +1345,21 @@ function loadFile(file,cb,onFail){
   const mb=file&&file.size?(file.size/1048576).toFixed(2):'?';
   setStatus('Reading '+nm+' ('+ty+', '+mb+' MB)…');
   let pendingOri=1; // EXIF orientation captured from the raw bytes, applied on decode
+  let rawDims=null; // true pixel dims from the JPEG SOF marker (pre-rotation)
 
   const succeed=(obj,w,h,via)=>{
     if(!w||!h){ failHard('decoder returned 0\u00d70 ('+via+')'); return; }
-    // Bake EXIF rotation into an upright source so detection + drawing are correct.
-    // The <img> fallback already auto-orients per CSS image-orientation, so only
-    // rotate manually for the bitmap path (which we forced to 'none' above).
-    if(via==='bitmap'){
-      const up=applyOrientation(obj,w,h,pendingOri);
-      obj=up.obj; w=up.w; h=up.h;
+    // Orientation: we ask the decoder to apply EXIF itself ('from-image'), which
+    // modern engines do by default anyway. But some WebViews silently ignore the
+    // option, so verify: for 90\u00b0 orientations (5-8) the rotated image must have
+    // swapped dimensions vs the raw SOF dims. If they still match the raw dims,
+    // the decoder did nothing and we bake the rotation in ourselves.
+    if(via==='bitmap'&&pendingOri>=5&&pendingOri<=8&&rawDims){
+      const decoderSkipped=(w===rawDims.w&&h===rawDims.h&&rawDims.w!==rawDims.h);
+      if(decoderSkipped){
+        const up=applyOrientation(obj,w,h,pendingOri);
+        obj=up.obj; w=up.w; h=up.h;
+      }
     }
     if(obj.naturalWidth===undefined){try{obj.naturalWidth=w;obj.naturalHeight=h;}catch(e){}}
     setStatus('Loaded '+nm+' \u2713');
@@ -1283,9 +1381,9 @@ function loadFile(file,cb,onFail){
 
   const decodeBlob=(blob)=>{
     if('createImageBitmap' in window){
-      // Ask for no auto-orientation so our explicit EXIF handling is the only
-      // rotation applied (some engines otherwise rotate, causing double-rotation).
-      const opts={imageOrientation:'none'};
+      // Ask the decoder to apply EXIF rotation itself; this is also the default
+      // in modern engines. The dims check in succeed() catches engines that don't.
+      const opts={imageOrientation:'from-image'};
       let p; try{ p=createImageBitmap(blob,opts); }catch(e){ p=createImageBitmap(blob); }
       p.then(bmp=>{ succeed(bmp, bmp.width, bmp.height, 'bitmap'); })
         .catch(err=>{ const why=(err&&err.name||'?'); setStatus('Bitmap failed ('+why+'), trying <img>…'); tryImg(blob,why); });
@@ -1303,7 +1401,8 @@ function loadFile(file,cb,onFail){
     const head=new Uint8Array(buf,0,Math.min(4,n));
     const isJPEG=head[0]===0xFF&&head[1]===0xD8;
     const isPNG=head[0]===0x89&&head[1]===0x50;
-    if(isJPEG){ try{ pendingOri=exifOrientation(buf); }catch(e){ pendingOri=1; } }
+    if(isJPEG){ try{ pendingOri=exifOrientation(buf); }catch(e){ pendingOri=1; }
+      try{ rawDims=jpegDims(buf); }catch(e){ rawDims=null; } }
     setStatus('Read '+n+' bytes; header '+[...head].map(b=>b.toString(16).padStart(2,'0')).join(' ')+(isJPEG?' (JPEG)':isPNG?' (PNG)':'')+' — decoding…');
     const fresh=new Blob([buf],{type:(ty&&ty!=='(blank)')?ty:(isJPEG?'image/jpeg':isPNG?'image/png':'application/octet-stream')});
     decodeBlob(fresh);
@@ -1404,6 +1503,46 @@ function flashAligned(){
 
 // Shared ingestion for a chosen file, whether it came from the picker, a drop,
 // or a paste. `which` is 'user' or 'ref'.
+let lastLoaded='user'; // which slot most recently received an image (rotate target)
+function installImage(img,which){
+  if(which==='ref'){
+    refImage=img;refPts=[];isAligned=false;compared=false;manuallyAligned=false;
+    try{refAuto=detectCorners(img);}catch(err){refAuto=null;console.error('detect failed',err);}
+    if(refAuto)refPts=refAuto.slice();
+    emptyState.style.display='none';drawRef();
+    ['s3','s4'].forEach(id=>document.getElementById(id).classList.remove('done','active'));
+    const s2=document.getElementById('s2');s2.classList.remove('active');s2.classList.add('done');
+    if(!userImage){const s1=document.getElementById('s1');s1.classList.add('active');
+      hint.innerHTML='Step 1: Upload your card';}
+  }else{
+    userImage=img;userPts=[];isAligned=false;compared=false;manuallyAligned=false;userWarpSrc=null;
+    try{userAuto=detectCorners(img);}catch(err){userAuto=null;console.error('detect failed',err);}
+    if(userAuto)userPts=userAuto.slice();
+    emptyState.style.display='none';drawUserPlain();
+    ['s3','s4'].forEach(id=>document.getElementById(id).classList.remove('done','active'));
+    const s1=document.getElementById('s1');s1.classList.remove('active');s1.classList.add('done');
+    if(!refImage){const s2=document.getElementById('s2');s2.classList.add('active');
+      hint.innerHTML='Step 2: Upload reference card';}
+  }
+  lastLoaded=which;
+  const rb=document.getElementById('rotateBtn'); if(rb)rb.disabled=false;
+}
+// Manual fallback: rotate the most recently loaded card 90° clockwise. Covers any
+// device/browser combo where the automatic EXIF handling still gets it wrong.
+function rotate90(){
+  const which=(lastLoaded==='ref'&&refImage)||!userImage?'ref':'user';
+  const img=which==='ref'?refImage:userImage;
+  if(!img)return;
+  const w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+  const c=document.createElement('canvas');c.width=h;c.height=w;
+  const cx=c.getContext('2d');
+  cx.transform(0,1,-1,0,h,0); // 90 CW
+  try{cx.drawImage(img,0,0);}catch(e){setStatus('Rotate failed: '+(e&&e.message||e));return;}
+  c.naturalWidth=h;c.naturalHeight=w;
+  showSkel(which);
+  setStatus('Rotated '+(which==='ref'?'reference card':'your card')+' 90°');
+  requestAnimationFrame(()=>setTimeout(()=>{installImage(c,which);hideSkel(which);maybeReady();},0));
+}
 function ingestImage(file,which){
   if(!checkFile(file))return;
   hideOnboard();
@@ -1411,25 +1550,7 @@ function ingestImage(file,which){
   loadFile(file,img=>{
     // Defer the heavy detection one frame so the skeleton paints first.
     requestAnimationFrame(()=>setTimeout(()=>{
-      if(which==='ref'){
-        refImage=img;refPts=[];isAligned=false;compared=false;manuallyAligned=false;
-        try{refAuto=detectCorners(img);}catch(err){refAuto=null;console.error('detect failed',err);}
-        if(refAuto)refPts=refAuto.slice();
-        emptyState.style.display='none';drawRef();
-        ['s3','s4'].forEach(id=>document.getElementById(id).classList.remove('done','active'));
-        const s2=document.getElementById('s2');s2.classList.remove('active');s2.classList.add('done');
-        if(!userImage){const s1=document.getElementById('s1');s1.classList.add('active');
-          hint.innerHTML='Step 1: Upload your card';}
-      }else{
-        userImage=img;userPts=[];isAligned=false;compared=false;manuallyAligned=false;userWarpSrc=null;
-        try{userAuto=detectCorners(img);}catch(err){userAuto=null;console.error('detect failed',err);}
-        if(userAuto)userPts=userAuto.slice();
-        emptyState.style.display='none';drawUserPlain();
-        ['s3','s4'].forEach(id=>document.getElementById(id).classList.remove('done','active'));
-        const s1=document.getElementById('s1');s1.classList.remove('active');s1.classList.add('done');
-        if(!refImage){const s2=document.getElementById('s2');s2.classList.add('active');
-          hint.innerHTML='Step 2: Upload reference card';}
-      }
+      installImage(img,which);
       hideSkel(which);
       maybeReady();
     },0));
@@ -1441,6 +1562,14 @@ document.getElementById('refFile').addEventListener('change',e=>{
   if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
 });
 document.getElementById('userFile').addEventListener('change',e=>{
+  const f=e.target.files[0];ingestImage(f,'user');e.target.value='';
+  if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+});
+document.getElementById('refCam').addEventListener('change',e=>{
+  const f=e.target.files[0];ingestImage(f,'ref');e.target.value='';
+  if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
+});
+document.getElementById('userCam').addEventListener('change',e=>{
   const f=e.target.files[0];ingestImage(f,'user');e.target.value='';
   if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();
 });
@@ -1505,8 +1634,9 @@ window.addEventListener('paste',e=>{
 /* Start over: clear everything back to the initial state */
 document.getElementById('resetBtn').onclick=()=>{
   refImage=userImage=null;refAuto=userAuto=null;refPts=[];userPts=[];userWarpSrc=null;
+  {const rb=document.getElementById('rotateBtn');if(rb)rb.disabled=true;}
   isAligned=false;compared=false;manuallyAligned=false;phase=null;
-  refFileEl.value='';userFileEl.value='';
+  refFileEl.value='';userFileEl.value='';userCamEl.value='';refCamEl.value='';
   setPct(50);resetZoom();
   mode='wipe';
   modebar.querySelectorAll('.modebtn').forEach(x=>x.classList.toggle('active',x.dataset.mode==='wipe'));
@@ -2653,6 +2783,7 @@ async function restoreComparison(rec){
   galleryModal.classList.remove('show');galleryModal.setAttribute('aria-hidden','true');
   const [uImg,rImg]=await Promise.all([loadImageFromURL(rec.userImg),loadImageFromURL(rec.refImg)]);
   userImage=uImg;refImage=rImg;
+  {const rb=document.getElementById('rotateBtn');if(rb)rb.disabled=false;lastLoaded='user';}
   // Invalidate cached warp artefacts from any previously-loaded card. Both caches
   // key on image dimensions + point positions, which can COLLIDE between two
   // different cards (Base-set cards share sizes, saved points can coincide), so
