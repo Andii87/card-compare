@@ -1,7 +1,7 @@
 /* Card Comparison service worker: pre-cache the app shell so it works
    offline once installed. Bump CACHE_VERSION whenever index.html changes
    so users pick up the new version. */
-const CACHE_VERSION = 'cardcompare-v8';
+const CACHE_VERSION = 'cardcompare-v9';
 const ASSETS = [
   './',
   './index.html',
