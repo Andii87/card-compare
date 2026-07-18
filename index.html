@@ -422,7 +422,7 @@ if('serviceWorker' in navigator){
 </head>
 <body>
 <header>
-  <div class="eyebrow">Card Comparison <span style="font-size:11px;color:var(--muted);font-weight:600;letter-spacing:0;-webkit-text-fill-color:var(--muted)">v7</span></div>
+  <div class="eyebrow">Card Comparison <span style="font-size:11px;color:var(--muted);font-weight:600;letter-spacing:0;-webkit-text-fill-color:var(--muted)">v8</span></div>
 </header>
 
 <div class="stage" id="stage">
@@ -1273,15 +1273,19 @@ async function tcgDoSearch(){
   if(!q){tcgStatus.textContent='Type a card name to search.';return;}
   tcgStatus.textContent='Searching…';tcgGrid.innerHTML='';
   try{
-    const query='name:"'+q.replace(/"/g,'')+'*"';
+    // Match every word independently so "blastoise" also finds "Blastoise ex",
+    // "Dark Blastoise", "M Blastoise-EX", etc. Words are ANDed together, so
+    // "dark blastoise" narrows to just the Dark ones.
+    const terms=q.split(/\s+/).map(w=>w.replace(/["':*]/g,'')).filter(Boolean);
+    const query=terms.map(w=>'name:'+w+'*').join(' ');
     const url='https://api.pokemontcg.io/v2/cards?q='+encodeURIComponent(query)
-      +'&pageSize=24&orderBy=set.releaseDate&select=id,name,number,set,images';
+      +'&pageSize=100&orderBy=set.releaseDate&select=id,name,number,set,images';
     const r=await fetch(url);
     if(!r.ok)throw new Error('HTTP '+r.status);
     const data=await r.json();
     const cards=(data&&data.data)||[];
     if(!cards.length){tcgStatus.textContent='No cards found for "'+q+'" — check the spelling.';return;}
-    tcgStatus.textContent=cards.length+' result'+(cards.length>1?'s':'')+' (oldest first) — tap a card to use it as your reference.';
+    tcgStatus.textContent=cards.length+' result'+(cards.length>1?'s':'')+(cards.length>=100?' (first 100, oldest first — add a word to narrow down)':' (oldest first)')+' — tap a card to use it as your reference.';
     cards.forEach(card=>{
       if(!card.images||!card.images.small)return;
       const b=document.createElement('button');b.className='tcg-item';b.type='button';
