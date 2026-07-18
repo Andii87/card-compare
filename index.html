@@ -310,6 +310,14 @@ if('serviceWorker' in navigator){
     width:42px;height:42px;border-radius:50%;cursor:pointer;
     background:var(--chip);border:1px solid var(--line);color:var(--ink);backdrop-filter:blur(8px)}
   .fsexit:hover{border-color:var(--flame)}
+  /* My references gallery */
+  .refs-tabs{display:flex;gap:8px;flex-wrap:wrap;padding:14px 18px 4px}
+  .refs-tab{padding:8px 14px;border-radius:999px;border:1px solid var(--line);background:var(--chip-solid);
+    color:var(--muted);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;transition:.15s}
+  .refs-tab.active{border-color:var(--flame);color:var(--ink);
+    background:linear-gradient(90deg,rgba(255,122,24,.18),rgba(255,194,60,.14))}
+  @media (hover:hover){ .refs-tab:hover{border-color:var(--flame);color:var(--ink)} }
+  .refs-status{padding:0 18px;color:var(--muted);font-size:12px;min-height:16px;margin:4px 0}
   /* Pokémon TCG database search */
   .tcg-card{width:min(720px,96vw);max-height:88vh}
   .tcg-bar{display:flex;gap:8px;padding:14px 18px 6px}
@@ -414,7 +422,7 @@ if('serviceWorker' in navigator){
 </head>
 <body>
 <header>
-  <div class="eyebrow">Card Comparison <span style="font-size:11px;color:var(--muted);font-weight:600;letter-spacing:0;-webkit-text-fill-color:var(--muted)">v6</span></div>
+  <div class="eyebrow">Card Comparison <span style="font-size:11px;color:var(--muted);font-weight:600;letter-spacing:0;-webkit-text-fill-color:var(--muted)">v7</span></div>
 </header>
 
 <div class="stage" id="stage">
@@ -575,6 +583,15 @@ if('serviceWorker' in navigator){
 </div>
 
 <input type="file" id="importFile" accept="application/json,text/plain,text/csv,.json,.txt,.csv" multiple style="display:none">
+<div class="modal" id="refsModal" aria-hidden="true">
+  <div class="modal-card tcg-card" role="dialog" aria-label="My reference cards">
+    <div class="modal-head"><h2>My references</h2>
+      <button class="btn iconbtn" id="refsClose" title="Close">✕</button></div>
+    <div class="refs-tabs" id="refsTabs"></div>
+    <p id="refsStatus" class="refs-status"></p>
+    <div class="tcg-grid" id="refsGrid"></div>
+  </div>
+</div>
 <div class="modal" id="tcgModal" aria-hidden="true">
   <div class="modal-card tcg-card" role="dialog" aria-label="Search card database">
     <div class="modal-head"><h2>Find reference card</h2>
@@ -599,6 +616,13 @@ if('serviceWorker' in navigator){
         </svg>
         <span class="so-t">Take photo</span>
         <span class="so-d">Use your phone camera</span>
+      </button>
+      <button class="src-opt" id="srcMyRefs" style="display:none">
+        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span class="so-t">My references</span>
+        <span class="so-d">Your own verified cards (Base, Jungle, Fossil…)</span>
       </button>
       <button class="src-opt" id="srcSearch" style="display:none">
         <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1135,6 +1159,7 @@ function openSourcePicker(which){
   srcTitle.textContent=which==='user'?'Add your card':'Add reference card';
   document.getElementById('srcCamera').style.display=hasCameraUI?'':'none';
   document.getElementById('srcSearch').style.display=which==='ref'?'':'none';
+  document.getElementById('srcMyRefs').style.display=which==='ref'?'':'none';
   srcModal.classList.add('show'); srcModal.setAttribute('aria-hidden','false');
 }
 function closeSourcePicker(){srcModal.classList.remove('show');srcModal.setAttribute('aria-hidden','true');}
@@ -1146,6 +1171,89 @@ document.getElementById('srcCamera').onclick=()=>{
 document.getElementById('srcLibrary').onclick=()=>{
   const el=srcTarget==='user'?userFileEl:refFileEl; el.value=''; closeSourcePicker(); el.click();
 };
+// ---- My references gallery (images stored in this repo's refs/ folder) ----
+// Folder listing comes from the GitHub API (the only way to list files on a
+// Pages site); the images themselves load same-origin from ./refs/, so they
+// also get cached by the service worker for offline use after first view.
+const REFS_REPO='Andii87/card-compare';
+const refsModal=document.getElementById('refsModal');
+const refsTabs=document.getElementById('refsTabs');
+const refsGrid=document.getElementById('refsGrid');
+const refsStatus=document.getElementById('refsStatus');
+let refsSets=null;   // {folderName: null | [{name}]}
+let refsActive=null;
+function prettySet(n){return n.replace(/[-_]+/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+function openRefs(){
+  closeSourcePicker();
+  refsModal.classList.add('show');refsModal.setAttribute('aria-hidden','false');
+  loadRefSets();
+}
+function closeRefs(){refsModal.classList.remove('show');refsModal.setAttribute('aria-hidden','true');}
+document.getElementById('refsClose').onclick=closeRefs;
+refsModal.addEventListener('click',e=>{if(e.target===refsModal)closeRefs();});
+async function ghList(path){
+  const r=await fetch('https://api.github.com/repos/'+REFS_REPO+'/contents/'+path);
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  return r.json();
+}
+async function loadRefSets(){
+  if(refsSets){renderRefTabs();return;}
+  refsStatus.textContent='Loading your sets…';refsTabs.innerHTML='';refsGrid.innerHTML='';
+  try{
+    const items=await ghList('refs');
+    const dirs=(Array.isArray(items)?items:[]).filter(i=>i.type==='dir');
+    if(!dirs.length){refsStatus.textContent='No sets found. Add folders of card images inside a "refs" folder in your GitHub repository.';return;}
+    refsSets={};dirs.forEach(d=>refsSets[d.name]=null);
+    renderRefTabs();
+    selectRefSet(dirs[0].name);
+  }catch(err){
+    refsStatus.textContent='Could not load the reference list ('+((err&&err.message)||err)+'). Check your internet connection — or if you renamed the repository, the app needs updating. (The GitHub list also has an hourly limit; wait a bit if you reopened this many times.)';
+  }
+}
+function renderRefTabs(){
+  refsTabs.innerHTML='';
+  Object.keys(refsSets).forEach(name=>{
+    const b=document.createElement('button');b.type='button';
+    b.className='refs-tab'+(name===refsActive?' active':'');
+    b.textContent=prettySet(name);
+    b.onclick=()=>selectRefSet(name);
+    refsTabs.appendChild(b);
+  });
+}
+async function selectRefSet(name){
+  refsActive=name;renderRefTabs();refsGrid.innerHTML='';
+  if(!refsSets[name]){
+    refsStatus.textContent='Loading '+prettySet(name)+'…';
+    try{
+      const items=await ghList('refs/'+name);
+      refsSets[name]=(Array.isArray(items)?items:[]).filter(i=>i.type==='file'&&/\.(webp|png|jpe?g)$/i.test(i.name));
+    }catch(err){refsStatus.textContent='Could not load that set ('+((err&&err.message)||err)+').';return;}
+  }
+  const files=refsSets[name];
+  if(!files.length){refsStatus.textContent='No images in that folder yet.';return;}
+  refsStatus.textContent=files.length+' cards — tap one to use it as your reference.';
+  files.forEach(f=>{
+    const rel='./refs/'+name+'/'+f.name;
+    const label=f.name.replace(/\.[^.]+$/,'').replace(/^\d+[-_]?/,'').replace(/[-_]+/g,' ');
+    const b=document.createElement('button');b.className='tcg-item';b.type='button';
+    const im=document.createElement('img');im.loading='lazy';im.src=rel;im.alt=label;
+    const cap=document.createElement('span');cap.textContent=label;
+    b.appendChild(im);b.appendChild(cap);
+    b.onclick=async()=>{
+      refsStatus.textContent='Loading '+label+'…';
+      try{
+        const r=await fetch(rel);
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        const blob=await r.blob();
+        const file=new File([blob],f.name,{type:blob.type||'image/webp'});
+        closeRefs();
+        ingestImage(file,'ref');
+      }catch(err){refsStatus.textContent='Could not load that card ('+((err&&err.message)||err)+').';}
+    };
+    refsGrid.appendChild(b);
+  });
+}
+document.getElementById('srcMyRefs').onclick=openRefs;
 // ---- Pokémon TCG database search (api.pokemontcg.io) ----
 const tcgModal=document.getElementById('tcgModal');
 const tcgGrid=document.getElementById('tcgGrid');
